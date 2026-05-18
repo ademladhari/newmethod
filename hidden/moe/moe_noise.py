@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from noise_layers.crop import Crop
 from noise_layers.dropout import Dropout
@@ -57,6 +58,7 @@ class MoENoiseLayer(nn.Module):
         ]
         self.attack_weights = np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float64)
         self._selected_expert_idx = 0
+        self._locked_expert_idx = None
 
     def set_attack_weights(self, attack_weights):
         if len(attack_weights) != len(self.experts):
@@ -83,11 +85,39 @@ class MoENoiseLayer(nn.Module):
     def get_last_expert_name(self):
         return self.expert_names[self._selected_expert_idx]
 
+    def pick_batch_expert(self):
+        """Pick one expert for the full batch (required for DataParallel multi-GPU)."""
+        self._locked_expert_idx = int(
+            np.random.choice(np.arange(len(self.experts)), p=self.attack_weights)
+        )
+
+    def clear_batch_expert(self):
+        self._locked_expert_idx = None
+
+    def _restore_spatial_size(self, noised_and_cover):
+        encoded_image = noised_and_cover[0]
+        target_size = encoded_image.shape[2:]
+        if noised_and_cover[0].shape[2:] != target_size:
+            noised_and_cover[0] = F.interpolate(
+                noised_and_cover[0],
+                size=target_size,
+                mode="bilinear",
+                align_corners=False,
+            )
+        return noised_and_cover
+
     def forward(self, encoded_and_cover):
         if not self.training:
             self._selected_expert_idx = 0
             return self.identity(encoded_and_cover)
 
-        self._selected_expert_idx = int(np.random.choice(np.arange(len(self.experts)), p=self.attack_weights))
-        return self.experts[self._selected_expert_idx](encoded_and_cover)
+        if self._locked_expert_idx is not None:
+            self._selected_expert_idx = self._locked_expert_idx
+        else:
+            self._selected_expert_idx = int(
+                np.random.choice(np.arange(len(self.experts)), p=self.attack_weights)
+            )
+
+        noised_and_cover = self.experts[self._selected_expert_idx](encoded_and_cover)
+        return self._restore_spatial_size(noised_and_cover)
 

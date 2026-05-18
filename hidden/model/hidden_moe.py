@@ -146,7 +146,15 @@ class HiddenMoE:
             d_loss_on_cover = self.bce_with_logits_loss(d_on_cover, d_target_label_cover.float())
             d_loss_on_cover.backward()
 
-            encoded_images, noised_images, decoded_messages, router_probs = self.encoder_decoder(images, messages)
+            noiser = self._encoder_decoder_module().noiser
+            noiser.pick_batch_expert()
+            try:
+                encoded_images, noised_images, decoded_messages, router_probs = self.encoder_decoder(
+                    images, messages
+                )
+            finally:
+                noiser.clear_batch_expert()
+
             d_on_encoded = self.discriminator(encoded_images.detach())
             d_loss_on_encoded = self.bce_with_logits_loss(d_on_encoded, d_target_label_encoded.float())
             d_loss_on_encoded.backward()
@@ -216,7 +224,15 @@ class HiddenMoE:
             d_on_cover = self.discriminator(images)
             d_loss_on_cover = self.bce_with_logits_loss(d_on_cover, d_target_label_cover.float())
 
-            encoded_images, noised_images, decoded_messages, router_probs = self.encoder_decoder(images, messages)
+            noiser = self._encoder_decoder_module().noiser
+            noiser.pick_batch_expert()
+            try:
+                encoded_images, noised_images, decoded_messages, router_probs = self.encoder_decoder(
+                    images, messages
+                )
+            finally:
+                noiser.clear_batch_expert()
+
             d_on_encoded = self.discriminator(encoded_images)
             d_loss_on_encoded = self.bce_with_logits_loss(d_on_encoded, d_target_label_encoded.float())
             d_on_encoded_for_enc = self.discriminator(encoded_images)
