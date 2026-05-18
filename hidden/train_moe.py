@@ -16,6 +16,18 @@ from model.hidden_moe import HiddenMoE
 from options_moe import HiDDenMoEConfiguration, TrainingOptions
 
 
+def get_data_loaders(hidden_config, train_options, num_workers=0):
+    train_loader, val_loader = utils.get_data_loaders(hidden_config, train_options)
+    train_loader.num_workers = num_workers
+    val_loader.num_workers = num_workers
+    return train_loader, val_loader
+
+
+def log_progress_and_flush(losses_accu):
+    utils.log_progress(losses_accu)
+    sys.stdout.flush()
+
+
 def train(
     model: HiddenMoE,
     device: torch.device,
@@ -23,18 +35,20 @@ def train(
     train_options: TrainingOptions,
     this_run_folder: str,
     tb_logger,
+    print_each: int = 3,
+    num_workers: int = 0,
 ):
-    train_data, val_data = utils.get_data_loaders(hidden_config, train_options)
+    train_data, val_data = get_data_loaders(hidden_config, train_options, num_workers=num_workers)
     file_count = len(train_data.dataset)
     if file_count % train_options.batch_size == 0:
         steps_in_epoch = file_count // train_options.batch_size
     else:
         steps_in_epoch = file_count // train_options.batch_size + 1
 
-    print_each = 10
     images_to_save = 8
     saved_images_size = (512, 512)
     lr_reduced = False
+    gpu_count = torch.cuda.device_count() if device.type == "cuda" else 0
 
     for epoch in range(train_options.start_epoch, train_options.number_of_epochs + 1):
         model.set_epoch(epoch)
@@ -44,9 +58,15 @@ def train(
                     param_group["lr"] = param_group["lr"] * 0.1
             lr_reduced = True
             logging.info("Phase 3 LR reduction applied (x0.1).")
+            sys.stdout.flush()
 
         logging.info("\nStarting epoch {}/{}".format(epoch, train_options.number_of_epochs))
-        logging.info("Batch size = {}\nSteps in epoch = {}".format(train_options.batch_size, steps_in_epoch))
+        logging.info(
+            "Batch size = {} | Steps in epoch = {} | Log every {} steps | GPUs = {}".format(
+                train_options.batch_size, steps_in_epoch, print_each, max(gpu_count, 1)
+            )
+        )
+        sys.stdout.flush()
         training_losses = defaultdict(AverageMeter)
         epoch_start = time.time()
         step = 1
@@ -58,10 +78,11 @@ def train(
 
             for name, loss in losses.items():
                 training_losses[name].update(loss)
-            if step % print_each == 0 or step == steps_in_epoch:
+            if step == 1 or step % print_each == 0 or step == steps_in_epoch:
                 logging.info("Epoch: {}/{} Step: {}/{}".format(epoch, train_options.number_of_epochs, step, steps_in_epoch))
-                utils.log_progress(training_losses)
+                log_progress_and_flush(training_losses)
                 logging.info("-" * 40)
+                sys.stdout.flush()
             step += 1
 
         if epoch >= 20 and training_losses["expert_max_use "].avg > 0.4:
@@ -100,9 +121,14 @@ def train(
                 )
                 first_iteration = False
 
-        utils.log_progress(validation_losses)
+        log_progress_and_flush(validation_losses)
         logging.info("-" * 40)
-        utils.save_checkpoint(model, train_options.experiment_name, epoch, os.path.join(this_run_folder, "checkpoints"))
+        sys.stdout.flush()
+        model.save_checkpoint(
+            train_options.experiment_name,
+            epoch,
+            os.path.join(this_run_folder, "checkpoints"),
+        )
         utils.write_losses(os.path.join(this_run_folder, "validation.csv"), validation_losses, epoch, time.time() - epoch_start)
 
 
@@ -124,6 +150,23 @@ def main():
     new_run_parser.add_argument("--balance-loss-weight", default=0.01, type=float, help="MoE balance loss weight.")
     new_run_parser.add_argument("--tensorboard", action="store_true", help="Use TensorBoard logging.")
     new_run_parser.add_argument("--enable-fp16", dest="enable_fp16", action="store_true", help="Enable mixed precision.")
+    new_run_parser.add_argument(
+        "--print-each",
+        default=3,
+        type=int,
+        help="Log training progress every N steps (default: 3).",
+    )
+    new_run_parser.add_argument(
+        "--num-workers",
+        default=0,
+        type=int,
+        help="DataLoader workers (use 0 on Kaggle notebooks).",
+    )
+    new_run_parser.add_argument(
+        "--no-multi-gpu",
+        action="store_true",
+        help="Disable DataParallel even if multiple GPUs are available.",
+    )
     new_run_parser.set_defaults(tensorboard=False)
     new_run_parser.set_defaults(enable_fp16=False)
 
@@ -131,8 +174,28 @@ def main():
     continue_parser.add_argument("--folder", "-f", required=True, type=str, help="Run folder path.")
     continue_parser.add_argument("--data-dir", "-d", required=False, type=str, help="Optional data dir override.")
     continue_parser.add_argument("--epochs", "-e", required=False, type=int, help="Optional epoch override.")
+    continue_parser.add_argument(
+        "--print-each",
+        default=3,
+        type=int,
+        help="Log training progress every N steps (default: 3).",
+    )
+    continue_parser.add_argument(
+        "--num-workers",
+        default=0,
+        type=int,
+        help="DataLoader workers (use 0 on Kaggle notebooks).",
+    )
+    continue_parser.add_argument(
+        "--no-multi-gpu",
+        action="store_true",
+        help="Disable DataParallel even if multiple GPUs are available.",
+    )
 
     args = parser.parse_args()
+    print_each = args.print_each
+    num_workers = args.num_workers
+    use_multi_gpu = not args.no_multi_gpu
     checkpoint = None
     loaded_checkpoint_file_name = None
 
@@ -154,7 +217,6 @@ def main():
                 )
     else:
         assert args.command == "new"
-        logging.info("Reminder: run baseline train.py first before train_moe.py.")
         train_options = TrainingOptions(
             batch_size=args.batch_size,
             number_of_epochs=args.epochs,
@@ -208,17 +270,30 @@ def main():
         tb_logger = None
 
     model = HiddenMoE(hidden_config, device, tb_logger)
+    if use_multi_gpu:
+        model.enable_multi_gpu()
     if args.command == "continue":
         logging.info("Loading checkpoint from file {}".format(loaded_checkpoint_file_name))
-        utils.model_from_checkpoint(model, checkpoint)
+        model.load_from_checkpoint(checkpoint)
 
+    logging.info("Reminder: run baseline train.py first before train_moe.py.")
     logging.info("HiDDeN MoE model: {}\n".format(model.to_stirng()))
     logging.info("Model Configuration:\n")
     logging.info(pprint.pformat(vars(hidden_config)))
     logging.info("\nTraining options:\n")
     logging.info(pprint.pformat(vars(train_options)))
 
-    train(model, device, hidden_config, train_options, this_run_folder, tb_logger)
+    sys.stdout.flush()
+    train(
+        model,
+        device,
+        hidden_config,
+        train_options,
+        this_run_folder,
+        tb_logger,
+        print_each=print_each,
+        num_workers=num_workers,
+    )
 
 
 if __name__ == "__main__":

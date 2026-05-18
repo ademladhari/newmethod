@@ -1,3 +1,6 @@
+import logging
+import os
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -60,8 +63,57 @@ class HiddenMoE:
             discrim_final = self.discriminator._modules["linear"]
             discrim_final.weight.register_hook(tb_logger.grad_hook_by_name("grads/discrim_out"))
 
+    def _encoder_decoder_module(self) -> EncoderDecoderMoE:
+        if isinstance(self.encoder_decoder, nn.DataParallel):
+            return self.encoder_decoder.module
+        return self.encoder_decoder
+
+    def _discriminator_module(self) -> Discriminator:
+        if isinstance(self.discriminator, nn.DataParallel):
+            return self.discriminator.module
+        return self.discriminator
+
+    def enable_multi_gpu(self) -> int:
+        """Wrap encoder-decoder and discriminator in DataParallel when multiple GPUs exist."""
+        gpu_count = torch.cuda.device_count()
+        if gpu_count > 1:
+            self.encoder_decoder = nn.DataParallel(self.encoder_decoder)
+            self.discriminator = nn.DataParallel(self.discriminator)
+            logging.info("Using {} GPUs with DataParallel.".format(gpu_count))
+        return gpu_count
+
+    @staticmethod
+    def _normalize_state_dict(state_dict):
+        if any(key.startswith("module.") for key in state_dict.keys()):
+            return {key.replace("module.", "", 1): value for key, value in state_dict.items()}
+        return state_dict
+
+    def load_from_checkpoint(self, checkpoint):
+        enc_dec_state = self._normalize_state_dict(checkpoint["enc-dec-model"])
+        discrim_state = self._normalize_state_dict(checkpoint["discrim-model"])
+        self._encoder_decoder_module().load_state_dict(enc_dec_state)
+        self._discriminator_module().load_state_dict(discrim_state)
+        self.optimizer_enc_dec.load_state_dict(checkpoint["enc-dec-optim"])
+        self.optimizer_discrim.load_state_dict(checkpoint["discrim-optim"])
+
+    def save_checkpoint(self, experiment_name: str, epoch: int, checkpoint_folder: str):
+        if not os.path.exists(checkpoint_folder):
+            os.makedirs(checkpoint_folder)
+
+        checkpoint_filename = os.path.join(checkpoint_folder, "{}--epoch-{}.pyt".format(experiment_name, epoch))
+        logging.info("Saving checkpoint to {}".format(checkpoint_filename))
+        checkpoint = {
+            "enc-dec-model": self._encoder_decoder_module().state_dict(),
+            "enc-dec-optim": self.optimizer_enc_dec.state_dict(),
+            "discrim-model": self._discriminator_module().state_dict(),
+            "discrim-optim": self.optimizer_discrim.state_dict(),
+            "epoch": epoch,
+        }
+        torch.save(checkpoint, checkpoint_filename)
+        logging.info("Saving checkpoint done.")
+
     def set_epoch(self, epoch: int):
-        self.encoder_decoder.noiser.set_training_schedule(epoch)
+        self._encoder_decoder_module().noiser.set_training_schedule(epoch)
         if epoch <= 20:
             self.current_balance_loss_weight = 0.001
         elif epoch <= 80:
@@ -142,11 +194,13 @@ class HiddenMoE:
 
     def validate_on_batch(self, batch: list):
         if self.tb_logger is not None:
-            encoder_final = self.encoder_decoder.encoder._modules["final_layer"]
+            encoder_decoder = self._encoder_decoder_module()
+            discriminator = self._discriminator_module()
+            encoder_final = encoder_decoder.encoder._modules["final_layer"]
             self.tb_logger.add_tensor("weights/encoder_out", encoder_final.weight)
-            expert_linear = self.encoder_decoder.decoder.moe_layer.experts[0].linear
+            expert_linear = encoder_decoder.decoder.moe_layer.experts[0].linear
             self.tb_logger.add_tensor("weights/moe_expert0_out", expert_linear.weight)
-            discrim_final = self.discriminator._modules["linear"]
+            discrim_final = discriminator._modules["linear"]
             self.tb_logger.add_tensor("weights/discrim_out", discrim_final.weight)
 
         images, messages = batch

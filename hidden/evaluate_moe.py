@@ -27,7 +27,10 @@ def _load_model_from_run_folder(run_folder: str, device: torch.device, is_moe: b
     else:
         model = Hidden(hidden_config, device, Noiser([], device), tb_logger=None)
 
-    utils.model_from_checkpoint(model, checkpoint)
+    if is_moe:
+        model.load_from_checkpoint(checkpoint)
+    else:
+        utils.model_from_checkpoint(model, checkpoint)
     model.encoder_decoder.eval()
     model.discriminator.eval()
     return model, hidden_config, checkpoint_file
