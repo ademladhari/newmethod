@@ -94,9 +94,8 @@ class MoENoiseLayer(nn.Module):
     def clear_batch_expert(self):
         self._locked_expert_idx = None
 
-    def _restore_spatial_size(self, noised_and_cover):
-        encoded_image = noised_and_cover[0]
-        target_size = encoded_image.shape[2:]
+    def _restore_spatial_size(self, noised_and_cover, target_size):
+        """Resize noised image back to cover/encoded spatial size (required for multi-GPU gather)."""
         if noised_and_cover[0].shape[2:] != target_size:
             noised_and_cover[0] = F.interpolate(
                 noised_and_cover[0],
@@ -111,6 +110,9 @@ class MoENoiseLayer(nn.Module):
             self._selected_expert_idx = 0
             return self.identity(encoded_and_cover)
 
+        # Use cover image size — experts may crop/resize encoded in-place.
+        target_size = encoded_and_cover[1].shape[2:]
+
         if self._locked_expert_idx is not None:
             self._selected_expert_idx = self._locked_expert_idx
         else:
@@ -119,5 +121,5 @@ class MoENoiseLayer(nn.Module):
             )
 
         noised_and_cover = self.experts[self._selected_expert_idx](encoded_and_cover)
-        return self._restore_spatial_size(noised_and_cover)
+        return self._restore_spatial_size(noised_and_cover, target_size)
 
