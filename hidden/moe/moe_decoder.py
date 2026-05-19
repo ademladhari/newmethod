@@ -30,6 +30,6 @@ class MoEDecoder(nn.Module):
 
     def forward(self, image_with_wm):
         features = self.feature_layers(image_with_wm)
-        decoded_message, router_probs = self.moe_layer(features)
-        return decoded_message, router_probs
+        decoded_message, router_probs, topk_indices = self.moe_layer(features)
+        return decoded_message, router_probs, topk_indices
 

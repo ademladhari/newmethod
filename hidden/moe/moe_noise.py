@@ -24,6 +24,34 @@ class GaussianNoise(nn.Module):
         return [noised_image, noised_and_cover[1]]
 
 
+class DeviceAwareJpegCompression(nn.Module):
+    """
+    Lazily instantiates one JPEG module per device for DataParallel safety.
+    """
+
+    def __init__(self, yuv_keep_weights=(25, 9, 9)):
+        super(DeviceAwareJpegCompression, self).__init__()
+        self.yuv_keep_weights = yuv_keep_weights
+        self._jpeg_by_device = nn.ModuleDict()
+
+    @staticmethod
+    def _device_key(device: torch.device):
+        if device.type == "cuda":
+            return "cuda_{}".format(device.index if device.index is not None else 0)
+        return "cpu"
+
+    def _get_or_create_jpeg(self, device: torch.device):
+        key = self._device_key(device)
+        if key not in self._jpeg_by_device:
+            self._jpeg_by_device[key] = JpegCompression(device, self.yuv_keep_weights)
+        return self._jpeg_by_device[key]
+
+    def forward(self, noised_and_cover):
+        current_device = noised_and_cover[0].device
+        jpeg_module = self._get_or_create_jpeg(current_device)
+        return jpeg_module(noised_and_cover)
+
+
 class MoENoiseLayer(nn.Module):
     """
     Distortion-expert noise layer.
@@ -50,7 +78,7 @@ class MoENoiseLayer(nn.Module):
         ]
         self.experts = [
             self.identity,
-            JpegCompression(device),
+            DeviceAwareJpegCompression(),
             Crop(crop_ratio, crop_ratio),
             Dropout(dropout_ratio),
             Resize(resize_ratio),

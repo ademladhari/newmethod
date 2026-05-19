@@ -68,9 +68,9 @@ class JpegCompression(nn.Module):
         self.device = device
 
         self.dct_conv_weights = torch.tensor(gen_filters(8, 8, dct_coeff), dtype=torch.float32).to(self.device)
-        self.dct_conv_weights.unsqueeze_(1)
+        self.dct_conv_weights = self.dct_conv_weights.unsqueeze(1)
         self.idct_conv_weights = torch.tensor(gen_filters(8, 8, idct_coeff), dtype=torch.float32).to(self.device)
-        self.idct_conv_weights.unsqueeze_(1)
+        self.idct_conv_weights = self.idct_conv_weights.unsqueeze(1)
 
         self.yuv_keep_weighs = yuv_keep_weights
         self.keep_coeff_masks = []
@@ -106,7 +106,7 @@ class JpegCompression(nn.Module):
 
         image_conv_channels = []
         for channel in range(image.shape[1]):
-            image_yuv_ch = image[:, channel, :, :].unsqueeze_(1)
+            image_yuv_ch = image[:, channel, :, :].unsqueeze(1)
             image_conv = F.conv2d(image_yuv_ch, filters, stride=8)
             image_conv = image_conv.permute(0, 2, 3, 1)
             image_conv = image_conv.view(image_conv.shape[0], image_conv.shape[1], image_conv.shape[2], 8, 8)
@@ -115,7 +115,7 @@ class JpegCompression(nn.Module):
                                                   image_conv.shape[1]*image_conv.shape[2],
                                                   image_conv.shape[3]*image_conv.shape[4])
 
-            image_conv.unsqueeze_(1)
+            image_conv = image_conv.unsqueeze(1)
 
             # image_conv = F.conv2d()
             image_conv_channels.append(image_conv)

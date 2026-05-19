@@ -54,5 +54,5 @@ class MoELayer(nn.Module):
         gather_index = topk_indices.unsqueeze(-1).expand(-1, -1, stacked_outputs.shape[-1])
         selected_outputs = torch.gather(stacked_outputs, dim=1, index=gather_index)
         combined = torch.sum(selected_outputs * topk_weights.unsqueeze(-1), dim=1)
-        return combined, full_probs
+        return combined, full_probs, topk_indices
 

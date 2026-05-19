@@ -105,7 +105,7 @@ def train(
         for image, _ in val_data:
             image = image.to(device)
             message = torch.Tensor(np.random.choice([0, 1], (image.shape[0], hidden_config.message_length))).to(device)
-            losses, (encoded_images, noised_images, decoded_messages, router_probs) = model.validate_on_batch([image, message])
+            losses, (encoded_images, noised_images, decoded_messages, router_probs, topk_indices) = model.validate_on_batch([image, message])
             for name, loss in losses.items():
                 validation_losses[name].update(loss)
             if first_iteration:
