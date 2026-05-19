@@ -8,7 +8,14 @@ class Router(nn.Module):
     Routes each sample to top-k experts and exposes full expert probabilities.
     """
 
-    def __init__(self, input_dim: int, num_experts: int, top_k: int):
+    def __init__(
+        self,
+        input_dim: int,
+        num_experts: int,
+        top_k: int,
+        jitter_noise: float = 0.01,
+        temperature: float = 1.0,
+    ):
         super(Router, self).__init__()
         if top_k <= 0:
             raise ValueError("top_k must be positive.")
@@ -17,6 +24,8 @@ class Router(nn.Module):
 
         self.num_experts = num_experts
         self.top_k = top_k
+        self.jitter_noise = jitter_noise
+        self.temperature = temperature
         hidden_dim = max(input_dim // 2, 32)
 
         self.mlp = nn.Sequential(
@@ -25,10 +34,16 @@ class Router(nn.Module):
             nn.Linear(hidden_dim, num_experts),
         )
 
+    def set_temperature(self, temperature: float):
+        self.temperature = max(float(temperature), 1e-4)
+
     def forward(self, features_flat: torch.Tensor):
-        logits = self.mlp(features_flat)
-        full_probs = F.softmax(logits, dim=1)
+        logits = self.mlp(features_flat).float()
+        if self.training and self.jitter_noise > 0:
+            logits = logits + torch.randn_like(logits) * self.jitter_noise
+        scaled_logits = logits / max(self.temperature, 1e-4)
+        full_probs = F.softmax(scaled_logits, dim=1)
         topk_weights, topk_indices = torch.topk(full_probs, k=self.top_k, dim=1)
         topk_weights = topk_weights / (topk_weights.sum(dim=1, keepdim=True) + 1e-8)
-        return topk_indices, topk_weights, full_probs
+        return topk_indices, topk_weights, full_probs, scaled_logits
 

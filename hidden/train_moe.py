@@ -85,10 +85,12 @@ def train(
                 sys.stdout.flush()
             step += 1
 
-        if epoch >= 20 and training_losses["expert_max_use "].avg > 0.4:
-            logging.warning("Expert usage warning: max expert share is {:.4f} (> 0.40).".format(
-                training_losses["expert_max_use "].avg
-            ))
+        if epoch >= 20 and training_losses["expert_max_sel "].avg > 0.8:
+            logging.warning(
+                "Expert usage warning: max expert selection rate is {:.4f} (> 0.80).".format(
+                    training_losses["expert_max_sel "].avg
+                )
+            )
 
         train_duration = time.time() - epoch_start
         logging.info("Epoch {} training duration {:.2f} sec".format(epoch, train_duration))
@@ -105,7 +107,7 @@ def train(
         for image, _ in val_data:
             image = image.to(device)
             message = torch.Tensor(np.random.choice([0, 1], (image.shape[0], hidden_config.message_length))).to(device)
-            losses, (encoded_images, noised_images, decoded_messages, router_probs, topk_indices) = model.validate_on_batch([image, message])
+            losses, (encoded_images, noised_images, decoded_messages, router_probs, topk_indices, router_logits) = model.validate_on_batch([image, message])
             for name, loss in losses.items():
                 validation_losses[name].update(loss)
             if first_iteration:
@@ -148,6 +150,10 @@ def main():
     new_run_parser.add_argument("--num-experts", default=8, type=int, help="Number of experts.")
     new_run_parser.add_argument("--top-k", default=2, type=int, help="Top-k routing.")
     new_run_parser.add_argument("--balance-loss-weight", default=0.01, type=float, help="MoE balance loss weight.")
+    new_run_parser.add_argument("--router-jitter-noise", default=0.01, type=float, help="Router jitter noise.")
+    new_run_parser.add_argument("--router-z-loss-weight", default=0.001, type=float, help="Router z-loss weight.")
+    new_run_parser.add_argument("--router-temperature-start", default=1.0, type=float, help="Initial router temperature.")
+    new_run_parser.add_argument("--router-temperature-end", default=1.0, type=float, help="Final router temperature.")
     new_run_parser.add_argument("--tensorboard", action="store_true", help="Use TensorBoard logging.")
     new_run_parser.add_argument("--enable-fp16", dest="enable_fp16", action="store_true", help="Enable mixed precision.")
     new_run_parser.add_argument(
@@ -203,6 +209,14 @@ def main():
         this_run_folder = args.folder
         options_file = os.path.join(this_run_folder, "options-and-config.pickle")
         train_options, hidden_config, noise_config = utils.load_options(options_file)
+        for key, default_value in (
+            ("router_jitter_noise", 0.01),
+            ("router_z_loss_weight", 0.001),
+            ("router_temperature_start", 1.0),
+            ("router_temperature_end", 1.0),
+        ):
+            if not hasattr(hidden_config, key):
+                setattr(hidden_config, key, default_value)
         checkpoint, loaded_checkpoint_file_name = utils.load_last_checkpoint(os.path.join(this_run_folder, "checkpoints"))
         train_options.start_epoch = checkpoint["epoch"] + 1
         if args.data_dir is not None:
@@ -245,6 +259,10 @@ def main():
             num_experts=args.num_experts,
             top_k=args.top_k,
             balance_loss_weight=args.balance_loss_weight,
+            router_jitter_noise=args.router_jitter_noise,
+            router_z_loss_weight=args.router_z_loss_weight,
+            router_temperature_start=args.router_temperature_start,
+            router_temperature_end=args.router_temperature_end,
         )
         this_run_folder = utils.create_folder_for_run(train_options.runs_folder, args.name)
         with open(os.path.join(this_run_folder, "options-and-config.pickle"), "wb+") as f:
@@ -283,6 +301,7 @@ def main():
     logging.info("\nTraining options:\n")
     logging.info(pprint.pformat(vars(train_options)))
 
+    hidden_config.number_of_epochs = train_options.number_of_epochs
     sys.stdout.flush()
     train(
         model,

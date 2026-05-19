@@ -24,8 +24,8 @@ class EncoderDecoderMoE(nn.Module):
         encoded_image = self.encoder(image, message)
         noised_and_cover = self.noiser([encoded_image, image])
         noised_image = noised_and_cover[0]
-        decoded_message, router_probs, topk_indices = self.decoder(noised_image)
-        return encoded_image, noised_image, decoded_message, router_probs, topk_indices
+        decoded_message, router_probs, topk_indices, router_logits = self.decoder(noised_image)
+        return encoded_image, noised_image, decoded_message, router_probs, topk_indices, router_logits
 
 
 class HiddenMoE:
@@ -52,6 +52,9 @@ class HiddenMoE:
         self.cover_label = 1
         self.encoded_label = 0
         self.current_balance_loss_weight = configuration.balance_loss_weight
+        self.router_z_loss_weight = getattr(configuration, "router_z_loss_weight", 0.001)
+        self.router_temperature_start = getattr(configuration, "router_temperature_start", 1.0)
+        self.router_temperature_end = getattr(configuration, "router_temperature_end", 1.0)
 
         self.tb_logger = tb_logger
         if tb_logger is not None:
@@ -113,7 +116,8 @@ class HiddenMoE:
         logging.info("Saving checkpoint done.")
 
     def set_epoch(self, epoch: int):
-        self._encoder_decoder_module().noiser.set_training_schedule(epoch)
+        encoder_decoder = self._encoder_decoder_module()
+        encoder_decoder.noiser.set_training_schedule(epoch)
         if epoch <= 20:
             self.current_balance_loss_weight = 0.001
         elif epoch <= 80:
@@ -124,6 +128,13 @@ class HiddenMoE:
         else:
             self.current_balance_loss_weight = self.config.balance_loss_weight
 
+        total_epochs = max(float(getattr(self.config, "number_of_epochs", 200)), 1.0)
+        progress = max(0.0, min(1.0, float(epoch - 1) / total_epochs))
+        current_temperature = self.router_temperature_start + (
+            self.router_temperature_end - self.router_temperature_start
+        ) * progress
+        encoder_decoder.decoder.moe_layer.router.set_temperature(current_temperature)
+
     def _calc_balance_loss(self, router_probs: torch.Tensor, topk_indices: torch.Tensor):
         num_experts = router_probs.shape[1]
         importance = torch.mean(router_probs, dim=0)
@@ -131,6 +142,11 @@ class HiddenMoE:
         load = torch.mean(topk_one_hot.reshape(-1, num_experts), dim=0)
         balance_loss = num_experts * torch.sum(importance * load)
         return balance_loss, load
+
+    @staticmethod
+    def _calc_router_z_loss(router_logits: torch.Tensor):
+        z = torch.logsumexp(router_logits, dim=-1)
+        return torch.mean(z ** 2)
 
     def train_on_batch(self, batch: list):
         images, messages = batch
@@ -151,7 +167,7 @@ class HiddenMoE:
             noiser = self._encoder_decoder_module().noiser
             noiser.pick_batch_expert()
             try:
-                encoded_images, noised_images, decoded_messages, router_probs, topk_indices = self.encoder_decoder(
+                encoded_images, noised_images, decoded_messages, router_probs, topk_indices, router_logits = self.encoder_decoder(
                     images, messages
                 )
             finally:
@@ -175,11 +191,13 @@ class HiddenMoE:
 
             g_loss_dec = self.bce_with_logits_loss(decoded_messages, messages.float())
             g_loss_bal, expert_load = self._calc_balance_loss(router_probs, topk_indices)
+            g_loss_z = self._calc_router_z_loss(router_logits)
             g_loss = (
                 self.config.adversarial_loss * g_loss_adv
                 + self.config.encoder_loss * g_loss_enc
                 + self.config.decoder_loss * g_loss_dec
                 + self.current_balance_loss_weight * g_loss_bal
+                + self.router_z_loss_weight * g_loss_z
             )
             g_loss.backward()
             self.optimizer_enc_dec.step()
@@ -194,13 +212,17 @@ class HiddenMoE:
             "encoder_mse    ": g_loss_enc.item(),
             "dec_bce        ": g_loss_dec.item(),
             "balance_loss   ": g_loss_bal.item(),
+            "router_z_loss  ": g_loss_z.item(),
             "bitwise-error  ": bitwise_avg_err,
             "adversarial_bce": g_loss_adv.item(),
             "discr_cover_bce": d_loss_on_cover.item(),
             "discr_encod_bce": d_loss_on_encoded.item(),
             "expert_max_use ": float(torch.max(expert_load).detach().cpu().item()),
+            "expert_max_sel ": float(torch.max(expert_load).detach().cpu().item() * topk_indices.shape[1]),
         }
-        return losses, (encoded_images, noised_images, decoded_messages, router_probs, topk_indices)
+        for idx, load_value in enumerate(expert_load.detach().cpu().tolist()):
+            losses["expert_load_{} ".format(idx)] = float(load_value)
+        return losses, (encoded_images, noised_images, decoded_messages, router_probs, topk_indices, router_logits)
 
     def validate_on_batch(self, batch: list):
         if self.tb_logger is not None:
@@ -229,7 +251,7 @@ class HiddenMoE:
             noiser = self._encoder_decoder_module().noiser
             noiser.pick_batch_expert()
             try:
-                encoded_images, noised_images, decoded_messages, router_probs, topk_indices = self.encoder_decoder(
+                encoded_images, noised_images, decoded_messages, router_probs, topk_indices, router_logits = self.encoder_decoder(
                     images, messages
                 )
             finally:
@@ -249,11 +271,13 @@ class HiddenMoE:
 
             g_loss_dec = self.bce_with_logits_loss(decoded_messages, messages.float())
             g_loss_bal, expert_load = self._calc_balance_loss(router_probs, topk_indices)
+            g_loss_z = self._calc_router_z_loss(router_logits)
             g_loss = (
                 self.config.adversarial_loss * g_loss_adv
                 + self.config.encoder_loss * g_loss_enc
                 + self.config.decoder_loss * g_loss_dec
                 + self.current_balance_loss_weight * g_loss_bal
+                + self.router_z_loss_weight * g_loss_z
             )
 
         decoded_rounded = torch.sigmoid(decoded_messages).detach().cpu().numpy().round().clip(0, 1)
@@ -265,13 +289,17 @@ class HiddenMoE:
             "encoder_mse    ": g_loss_enc.item(),
             "dec_bce        ": g_loss_dec.item(),
             "balance_loss   ": g_loss_bal.item(),
+            "router_z_loss  ": g_loss_z.item(),
             "bitwise-error  ": bitwise_avg_err,
             "adversarial_bce": g_loss_adv.item(),
             "discr_cover_bce": d_loss_on_cover.item(),
             "discr_encod_bce": d_loss_on_encoded.item(),
             "expert_max_use ": float(torch.max(expert_load).detach().cpu().item()),
+            "expert_max_sel ": float(torch.max(expert_load).detach().cpu().item() * topk_indices.shape[1]),
         }
-        return losses, (encoded_images, noised_images, decoded_messages, router_probs, topk_indices)
+        for idx, load_value in enumerate(expert_load.detach().cpu().tolist()):
+            losses["expert_load_{} ".format(idx)] = float(load_value)
+        return losses, (encoded_images, noised_images, decoded_messages, router_probs, topk_indices, router_logits)
 
     def to_stirng(self):
         return "{}\n{}".format(str(self.encoder_decoder), str(self.discriminator))

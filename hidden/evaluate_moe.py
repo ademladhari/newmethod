@@ -87,7 +87,7 @@ def evaluate_attack(attack_layers, baseline_model, moe_model, data_loader, messa
             noised_moe = _apply_attack(attack_layers, encoded_moe, image)
 
             decoded_baseline = baseline_model.encoder_decoder.decoder(noised_baseline)
-            decoded_moe, router_probs, topk_indices = moe_model.encoder_decoder.decoder(noised_moe)
+            decoded_moe, router_probs, topk_indices, router_logits = moe_model.encoder_decoder.decoder(noised_moe)
 
             baseline_acc.append(_bit_accuracy(decoded_baseline, message, use_sigmoid=False))
             moe_acc.append(_bit_accuracy(decoded_moe, message, use_sigmoid=True))

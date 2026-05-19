@@ -26,10 +26,12 @@ class MoEDecoder(nn.Module):
             top_k=config.top_k,
             shared_channels=self.channels,
             expert_channels=self.channels,
+            router_jitter_noise=getattr(config, "router_jitter_noise", 0.01),
+            router_temperature=getattr(config, "router_temperature_start", 1.0),
         )
 
     def forward(self, image_with_wm):
         features = self.feature_layers(image_with_wm)
-        decoded_message, router_probs, topk_indices = self.moe_layer(features)
-        return decoded_message, router_probs, topk_indices
+        decoded_message, router_probs, topk_indices, router_logits = self.moe_layer(features)
+        return decoded_message, router_probs, topk_indices, router_logits
 

@@ -19,6 +19,8 @@ class MoELayer(nn.Module):
         top_k: int = 2,
         shared_channels: int = 64,
         expert_channels: int = 64,
+        router_jitter_noise: float = 0.01,
+        router_temperature: float = 1.0,
     ):
         super(MoELayer, self).__init__()
         self.num_experts = num_experts
@@ -29,7 +31,13 @@ class MoELayer(nn.Module):
             ConvBNRelu(shared_channels, shared_channels),
         )
         self.pool = nn.AdaptiveAvgPool2d(output_size=(1, 1))
-        self.router = Router(shared_channels, num_experts, top_k)
+        self.router = Router(
+            shared_channels,
+            num_experts,
+            top_k,
+            jitter_noise=router_jitter_noise,
+            temperature=router_temperature,
+        )
         self.experts = nn.ModuleList(
             [
                 Expert(
@@ -44,7 +52,7 @@ class MoELayer(nn.Module):
     def forward(self, x):
         shared_features = self.shared_extractor(x)
         pooled = self.pool(shared_features).flatten(start_dim=1)
-        topk_indices, topk_weights, full_probs = self.router(pooled)
+        topk_indices, topk_weights, full_probs, router_logits = self.router(pooled)
 
         expert_outputs = []
         for expert in self.experts:
@@ -54,5 +62,5 @@ class MoELayer(nn.Module):
         gather_index = topk_indices.unsqueeze(-1).expand(-1, -1, stacked_outputs.shape[-1])
         selected_outputs = torch.gather(stacked_outputs, dim=1, index=gather_index)
         combined = torch.sum(selected_outputs * topk_weights.unsqueeze(-1), dim=1)
-        return combined, full_probs, topk_indices
+        return combined, full_probs, topk_indices, router_logits
 

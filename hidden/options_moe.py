@@ -22,6 +22,10 @@ class HiDDenMoEConfiguration(HiDDenConfiguration):
         num_experts: int = 8,
         top_k: int = 2,
         balance_loss_weight: float = 0.01,
+        router_jitter_noise: float = 0.01,
+        router_z_loss_weight: float = 0.001,
+        router_temperature_start: float = 1.0,
+        router_temperature_end: float = 1.0,
     ):
         super(HiDDenMoEConfiguration, self).__init__(
             H=H,
@@ -43,4 +47,8 @@ class HiDDenMoEConfiguration(HiDDenConfiguration):
         self.num_experts = num_experts
         self.top_k = top_k
         self.balance_loss_weight = balance_loss_weight
+        self.router_jitter_noise = router_jitter_noise
+        self.router_z_loss_weight = router_z_loss_weight
+        self.router_temperature_start = router_temperature_start
+        self.router_temperature_end = router_temperature_end
 
