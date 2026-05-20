@@ -27,7 +27,10 @@ class MoEDecoder(nn.Module):
             shared_channels=self.channels,
             expert_channels=self.channels,
             router_jitter_noise=getattr(config, "router_jitter_noise", 0.01),
+            router_input_dropout=getattr(config, "router_input_dropout", 0.1),
             router_temperature=getattr(config, "router_temperature_start", 1.0),
+            expert_dropout=getattr(config, "expert_dropout", 0.1),
+            expert_init_offset_scale=getattr(config, "expert_init_offset_scale", 1e-3),
         )
 
     def forward(self, image_with_wm):

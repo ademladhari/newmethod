@@ -150,10 +150,42 @@ def main():
     new_run_parser.add_argument("--num-experts", default=8, type=int, help="Number of experts.")
     new_run_parser.add_argument("--top-k", default=2, type=int, help="Top-k routing.")
     new_run_parser.add_argument("--balance-loss-weight", default=0.01, type=float, help="MoE balance loss weight.")
+    new_run_parser.add_argument(
+        "--balance-loss-start-weight",
+        default=0.01,
+        type=float,
+        help="Initial balance weight used during warmup.",
+    )
+    new_run_parser.add_argument(
+        "--balance-loss-warmup-epochs",
+        default=20,
+        type=int,
+        help="Epochs used to linearly warm balance loss weight.",
+    )
     new_run_parser.add_argument("--router-jitter-noise", default=0.01, type=float, help="Router jitter noise.")
+    new_run_parser.add_argument("--router-input-dropout", default=0.1, type=float, help="Router input dropout.")
     new_run_parser.add_argument("--router-z-loss-weight", default=0.001, type=float, help="Router z-loss weight.")
     new_run_parser.add_argument("--router-temperature-start", default=1.0, type=float, help="Initial router temperature.")
     new_run_parser.add_argument("--router-temperature-end", default=1.0, type=float, help="Final router temperature.")
+    new_run_parser.add_argument(
+        "--router-grad-clip-norm",
+        default=1.0,
+        type=float,
+        help="Clip norm threshold for router gradients (0 disables).",
+    )
+    new_run_parser.add_argument("--expert-dropout", default=0.1, type=float, help="Dropout used inside each expert.")
+    new_run_parser.add_argument(
+        "--expert-weight-decay",
+        default=1e-4,
+        type=float,
+        help="Weight decay applied to expert parameters only.",
+    )
+    new_run_parser.add_argument(
+        "--expert-init-offset-scale",
+        default=1e-3,
+        type=float,
+        help="Scale of per-expert random init offset for symmetry breaking.",
+    )
     new_run_parser.add_argument("--tensorboard", action="store_true", help="Use TensorBoard logging.")
     new_run_parser.add_argument("--enable-fp16", dest="enable_fp16", action="store_true", help="Enable mixed precision.")
     new_run_parser.add_argument(
@@ -211,9 +243,16 @@ def main():
         train_options, hidden_config, noise_config = utils.load_options(options_file)
         for key, default_value in (
             ("router_jitter_noise", 0.01),
+            ("router_input_dropout", 0.1),
             ("router_z_loss_weight", 0.001),
             ("router_temperature_start", 1.0),
             ("router_temperature_end", 1.0),
+            ("router_grad_clip_norm", 1.0),
+            ("balance_loss_start_weight", 0.01),
+            ("balance_loss_warmup_epochs", 20),
+            ("expert_dropout", 0.1),
+            ("expert_weight_decay", 1e-4),
+            ("expert_init_offset_scale", 1e-3),
         ):
             if not hasattr(hidden_config, key):
                 setattr(hidden_config, key, default_value)
@@ -259,10 +298,17 @@ def main():
             num_experts=args.num_experts,
             top_k=args.top_k,
             balance_loss_weight=args.balance_loss_weight,
+            balance_loss_start_weight=args.balance_loss_start_weight,
+            balance_loss_warmup_epochs=args.balance_loss_warmup_epochs,
             router_jitter_noise=args.router_jitter_noise,
+            router_input_dropout=args.router_input_dropout,
             router_z_loss_weight=args.router_z_loss_weight,
             router_temperature_start=args.router_temperature_start,
             router_temperature_end=args.router_temperature_end,
+            router_grad_clip_norm=args.router_grad_clip_norm,
+            expert_dropout=args.expert_dropout,
+            expert_weight_decay=args.expert_weight_decay,
+            expert_init_offset_scale=args.expert_init_offset_scale,
         )
         this_run_folder = utils.create_folder_for_run(train_options.runs_folder, args.name)
         with open(os.path.join(this_run_folder, "options-and-config.pickle"), "wb+") as f:

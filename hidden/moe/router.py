@@ -14,6 +14,7 @@ class Router(nn.Module):
         num_experts: int,
         top_k: int,
         jitter_noise: float = 0.01,
+        input_dropout: float = 0.1,
         temperature: float = 1.0,
     ):
         super(Router, self).__init__()
@@ -26,6 +27,7 @@ class Router(nn.Module):
         self.top_k = top_k
         self.jitter_noise = jitter_noise
         self.temperature = temperature
+        self.input_dropout = nn.Dropout(p=max(0.0, min(1.0, input_dropout)))
         hidden_dim = max(input_dim // 2, 32)
 
         self.mlp = nn.Sequential(
@@ -38,7 +40,8 @@ class Router(nn.Module):
         self.temperature = max(float(temperature), 1e-4)
 
     def forward(self, features_flat: torch.Tensor):
-        logits = self.mlp(features_flat).float()
+        dropped_features = self.input_dropout(features_flat)
+        logits = self.mlp(dropped_features).float()
         if self.training and self.jitter_noise > 0:
             logits = logits + torch.randn_like(logits) * self.jitter_noise
         scaled_logits = logits / max(self.temperature, 1e-4)

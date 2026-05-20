@@ -22,10 +22,17 @@ class HiDDenMoEConfiguration(HiDDenConfiguration):
         num_experts: int = 8,
         top_k: int = 2,
         balance_loss_weight: float = 0.01,
+        balance_loss_start_weight: float = 0.01,
+        balance_loss_warmup_epochs: int = 20,
         router_jitter_noise: float = 0.01,
+        router_input_dropout: float = 0.1,
         router_z_loss_weight: float = 0.001,
         router_temperature_start: float = 1.0,
         router_temperature_end: float = 1.0,
+        router_grad_clip_norm: float = 1.0,
+        expert_dropout: float = 0.1,
+        expert_weight_decay: float = 1e-4,
+        expert_init_offset_scale: float = 1e-3,
     ):
         super(HiDDenMoEConfiguration, self).__init__(
             H=H,
@@ -47,8 +54,15 @@ class HiDDenMoEConfiguration(HiDDenConfiguration):
         self.num_experts = num_experts
         self.top_k = top_k
         self.balance_loss_weight = balance_loss_weight
+        self.balance_loss_start_weight = balance_loss_start_weight
+        self.balance_loss_warmup_epochs = balance_loss_warmup_epochs
         self.router_jitter_noise = router_jitter_noise
+        self.router_input_dropout = router_input_dropout
         self.router_z_loss_weight = router_z_loss_weight
         self.router_temperature_start = router_temperature_start
         self.router_temperature_end = router_temperature_end
+        self.router_grad_clip_norm = router_grad_clip_norm
+        self.expert_dropout = expert_dropout
+        self.expert_weight_decay = expert_weight_decay
+        self.expert_init_offset_scale = expert_init_offset_scale
 

@@ -34,7 +34,28 @@ class HiddenMoE:
 
         self.encoder_decoder = EncoderDecoderMoE(configuration, MoENoiseLayer(device=device)).to(device)
         self.discriminator = Discriminator(configuration).to(device)
-        self.optimizer_enc_dec = torch.optim.Adam(self.encoder_decoder.parameters())
+        self.config = configuration
+        self.device = device
+
+        self.balance_loss_start_weight = getattr(configuration, "balance_loss_start_weight", 0.01)
+        self.balance_loss_warmup_epochs = max(1, int(getattr(configuration, "balance_loss_warmup_epochs", 20)))
+        self.router_z_loss_weight = getattr(configuration, "router_z_loss_weight", 0.001)
+        self.router_temperature_start = getattr(configuration, "router_temperature_start", 1.0)
+        self.router_temperature_end = getattr(configuration, "router_temperature_end", 1.0)
+        self.router_grad_clip_norm = max(0.0, float(getattr(configuration, "router_grad_clip_norm", 1.0)))
+        self.expert_weight_decay = max(0.0, float(getattr(configuration, "expert_weight_decay", 1e-4)))
+
+        expert_params = list(self.encoder_decoder.decoder.moe_layer.experts.parameters())
+        expert_param_ids = {id(param) for param in expert_params}
+        non_expert_params = [
+            param for param in self.encoder_decoder.parameters() if id(param) not in expert_param_ids
+        ]
+        self.optimizer_enc_dec = torch.optim.Adam(
+            [
+                {"params": non_expert_params},
+                {"params": expert_params, "weight_decay": self.expert_weight_decay},
+            ]
+        )
         self.optimizer_discrim = torch.optim.Adam(self.discriminator.parameters())
 
         if configuration.use_vgg:
@@ -43,18 +64,12 @@ class HiddenMoE:
         else:
             self.vgg_loss = None
 
-        self.config = configuration
-        self.device = device
-
         self.bce_with_logits_loss = nn.BCEWithLogitsLoss().to(device)
         self.mse_loss = nn.MSELoss().to(device)
 
         self.cover_label = 1
         self.encoded_label = 0
         self.current_balance_loss_weight = configuration.balance_loss_weight
-        self.router_z_loss_weight = getattr(configuration, "router_z_loss_weight", 0.001)
-        self.router_temperature_start = getattr(configuration, "router_temperature_start", 1.0)
-        self.router_temperature_end = getattr(configuration, "router_temperature_end", 1.0)
 
         self.tb_logger = tb_logger
         if tb_logger is not None:
@@ -118,15 +133,10 @@ class HiddenMoE:
     def set_epoch(self, epoch: int):
         encoder_decoder = self._encoder_decoder_module()
         encoder_decoder.noiser.set_training_schedule(epoch)
-        if epoch <= 20:
-            self.current_balance_loss_weight = 0.001
-        elif epoch <= 80:
-            progress = float(epoch - 20) / 60.0
-            self.current_balance_loss_weight = 0.001 + (self.config.balance_loss_weight - 0.001) * max(
-                0.0, min(1.0, progress)
-            )
-        else:
-            self.current_balance_loss_weight = self.config.balance_loss_weight
+        progress = max(0.0, min(1.0, float(epoch - 1) / float(self.balance_loss_warmup_epochs)))
+        self.current_balance_loss_weight = self.balance_loss_start_weight + (
+            self.config.balance_loss_weight - self.balance_loss_start_weight
+        ) * progress
 
         total_epochs = max(float(getattr(self.config, "number_of_epochs", 200)), 1.0)
         progress = max(0.0, min(1.0, float(epoch - 1) / total_epochs))
@@ -147,6 +157,24 @@ class HiddenMoE:
     def _calc_router_z_loss(router_logits: torch.Tensor):
         z = torch.logsumexp(router_logits, dim=-1)
         return torch.mean(z ** 2)
+
+    @staticmethod
+    def _calc_router_entropy(router_probs: torch.Tensor):
+        entropy = -(router_probs * torch.log(router_probs + 1e-8)).sum(dim=-1)
+        return torch.mean(entropy)
+
+    def _calc_expert_weight_similarity(self):
+        experts = self._encoder_decoder_module().decoder.moe_layer.experts
+        if len(experts) < 2:
+            return torch.tensor(0.0, device=self.device)
+        flat_weights = []
+        for expert in experts:
+            flat_weights.append(expert.linear.weight.reshape(-1))
+        weight_matrix = torch.stack(flat_weights, dim=0)
+        normalized = torch.nn.functional.normalize(weight_matrix, p=2, dim=1, eps=1e-8)
+        cosine_matrix = torch.mm(normalized, normalized.t())
+        mask = torch.triu(torch.ones_like(cosine_matrix), diagonal=1).bool()
+        return cosine_matrix[mask].mean()
 
     def train_on_batch(self, batch: list):
         images, messages = batch
@@ -192,6 +220,8 @@ class HiddenMoE:
             g_loss_dec = self.bce_with_logits_loss(decoded_messages, messages.float())
             g_loss_bal, expert_load = self._calc_balance_loss(router_probs, topk_indices)
             g_loss_z = self._calc_router_z_loss(router_logits)
+            router_entropy = self._calc_router_entropy(router_probs)
+            expert_weight_similarity = self._calc_expert_weight_similarity()
             g_loss = (
                 self.config.adversarial_loss * g_loss_adv
                 + self.config.encoder_loss * g_loss_enc
@@ -200,6 +230,12 @@ class HiddenMoE:
                 + self.router_z_loss_weight * g_loss_z
             )
             g_loss.backward()
+            if self.router_grad_clip_norm > 0:
+                router_params = self._encoder_decoder_module().decoder.moe_layer.router.parameters()
+                router_grad_norm = torch.nn.utils.clip_grad_norm_(router_params, self.router_grad_clip_norm)
+                router_grad_norm_value = float(router_grad_norm.detach().cpu().item())
+            else:
+                router_grad_norm_value = 0.0
             self.optimizer_enc_dec.step()
 
         decoded_rounded = torch.sigmoid(decoded_messages).detach().cpu().numpy().round().clip(0, 1)
@@ -213,6 +249,10 @@ class HiddenMoE:
             "dec_bce        ": g_loss_dec.item(),
             "balance_loss   ": g_loss_bal.item(),
             "router_z_loss  ": g_loss_z.item(),
+            "router_entropy ": router_entropy.item(),
+            "router_grad_norm": router_grad_norm_value,
+            "expert_w_cos  ": float(expert_weight_similarity.detach().cpu().item()),
+            "balance_alpha ": self.current_balance_loss_weight,
             "bitwise-error  ": bitwise_avg_err,
             "adversarial_bce": g_loss_adv.item(),
             "discr_cover_bce": d_loss_on_cover.item(),
@@ -272,6 +312,8 @@ class HiddenMoE:
             g_loss_dec = self.bce_with_logits_loss(decoded_messages, messages.float())
             g_loss_bal, expert_load = self._calc_balance_loss(router_probs, topk_indices)
             g_loss_z = self._calc_router_z_loss(router_logits)
+            router_entropy = self._calc_router_entropy(router_probs)
+            expert_weight_similarity = self._calc_expert_weight_similarity()
             g_loss = (
                 self.config.adversarial_loss * g_loss_adv
                 + self.config.encoder_loss * g_loss_enc
@@ -290,6 +332,9 @@ class HiddenMoE:
             "dec_bce        ": g_loss_dec.item(),
             "balance_loss   ": g_loss_bal.item(),
             "router_z_loss  ": g_loss_z.item(),
+            "router_entropy ": router_entropy.item(),
+            "expert_w_cos  ": float(expert_weight_similarity.detach().cpu().item()),
+            "balance_alpha ": self.current_balance_loss_weight,
             "bitwise-error  ": bitwise_avg_err,
             "adversarial_bce": g_loss_adv.item(),
             "discr_cover_bce": d_loss_on_cover.item(),

@@ -20,7 +20,10 @@ class MoELayer(nn.Module):
         shared_channels: int = 64,
         expert_channels: int = 64,
         router_jitter_noise: float = 0.01,
+        router_input_dropout: float = 0.1,
         router_temperature: float = 1.0,
+        expert_dropout: float = 0.1,
+        expert_init_offset_scale: float = 1e-3,
     ):
         super(MoELayer, self).__init__()
         self.num_experts = num_experts
@@ -36,6 +39,7 @@ class MoELayer(nn.Module):
             num_experts,
             top_k,
             jitter_noise=router_jitter_noise,
+            input_dropout=router_input_dropout,
             temperature=router_temperature,
         )
         self.experts = nn.ModuleList(
@@ -44,10 +48,23 @@ class MoELayer(nn.Module):
                     in_channels=shared_channels,
                     expert_channels=expert_channels,
                     message_length=message_length,
+                    dropout=expert_dropout,
                 )
                 for _ in range(num_experts)
             ]
         )
+        self._apply_distinct_expert_init(expert_init_offset_scale)
+
+    def _apply_distinct_expert_init(self, offset_scale: float):
+        if offset_scale <= 0:
+            return
+        center = (self.num_experts - 1) * 0.5
+        with torch.no_grad():
+            for idx, expert in enumerate(self.experts):
+                scale = (idx - center) * offset_scale
+                for param in expert.parameters():
+                    if param.ndim > 1:
+                        param.add_(torch.randn_like(param) * scale)
 
     def forward(self, x):
         shared_features = self.shared_extractor(x)
