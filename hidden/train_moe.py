@@ -37,6 +37,7 @@ def train(
     tb_logger,
     print_each: int = 3,
     num_workers: int = 0,
+    save_every: int = 1,
 ):
     train_data, val_data = get_data_loaders(hidden_config, train_options, num_workers=num_workers)
     file_count = len(train_data.dataset)
@@ -102,9 +103,11 @@ def train(
             tb_logger.save_tensors(epoch)
 
         first_iteration = True
+        val_batches = 0
         validation_losses = defaultdict(AverageMeter)
         logging.info("Running validation for epoch {}/{}".format(epoch, train_options.number_of_epochs))
         for image, _ in val_data:
+            val_batches += 1
             image = image.to(device)
             message = torch.Tensor(np.random.choice([0, 1], (image.shape[0], hidden_config.message_length))).to(device)
             losses, (encoded_images, noised_images, decoded_messages, router_probs, topk_indices, router_logits) = model.validate_on_batch([image, message])
@@ -123,15 +126,30 @@ def train(
                 )
                 first_iteration = False
 
-        log_progress_and_flush(validation_losses)
+        if val_batches > 0:
+            log_progress_and_flush(validation_losses)
+        else:
+            logging.warning(
+                "Validation skipped for epoch {} because no validation batches were found in {}.".format(
+                    epoch, train_options.validation_folder
+                )
+            )
         logging.info("-" * 40)
         sys.stdout.flush()
-        model.save_checkpoint(
-            train_options.experiment_name,
-            epoch,
-            os.path.join(this_run_folder, "checkpoints"),
-        )
-        utils.write_losses(os.path.join(this_run_folder, "validation.csv"), validation_losses, epoch, time.time() - epoch_start)
+        should_save_checkpoint = (epoch % save_every == 0) or (epoch == train_options.number_of_epochs)
+        if should_save_checkpoint:
+            model.save_checkpoint(
+                train_options.experiment_name,
+                epoch,
+                os.path.join(this_run_folder, "checkpoints"),
+            )
+        if val_batches > 0:
+            utils.write_losses(
+                os.path.join(this_run_folder, "validation.csv"),
+                validation_losses,
+                epoch,
+                time.time() - epoch_start,
+            )
 
 
 def main():
@@ -205,6 +223,12 @@ def main():
         action="store_true",
         help="Disable DataParallel even if multiple GPUs are available.",
     )
+    new_run_parser.add_argument(
+        "--save-every",
+        default=1,
+        type=int,
+        help="Save checkpoint every N epochs (default: 1).",
+    )
     new_run_parser.set_defaults(tensorboard=False)
     new_run_parser.set_defaults(enable_fp16=False)
 
@@ -229,10 +253,17 @@ def main():
         action="store_true",
         help="Disable DataParallel even if multiple GPUs are available.",
     )
+    continue_parser.add_argument(
+        "--save-every",
+        default=1,
+        type=int,
+        help="Save checkpoint every N epochs (default: 1).",
+    )
 
     args = parser.parse_args()
     print_each = args.print_each
     num_workers = args.num_workers
+    save_every = max(1, args.save_every)
     use_multi_gpu = not args.no_multi_gpu
     checkpoint = None
     loaded_checkpoint_file_name = None
@@ -358,6 +389,7 @@ def main():
         tb_logger,
         print_each=print_each,
         num_workers=num_workers,
+        save_every=save_every,
     )
 
 
