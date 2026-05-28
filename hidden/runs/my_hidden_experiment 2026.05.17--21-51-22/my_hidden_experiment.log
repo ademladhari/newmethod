@@ -1,0 +1,729 @@
+HiDDeN model: EncoderDecoder(
+  (encoder): Encoder(
+    (conv_layers): Sequential(
+      (0): ConvBNRelu(
+        (layers): Sequential(
+          (0): Conv2d(3, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          (1): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+          (2): ReLU(inplace=True)
+        )
+      )
+      (1): ConvBNRelu(
+        (layers): Sequential(
+          (0): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          (1): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+          (2): ReLU(inplace=True)
+        )
+      )
+      (2): ConvBNRelu(
+        (layers): Sequential(
+          (0): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          (1): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+          (2): ReLU(inplace=True)
+        )
+      )
+      (3): ConvBNRelu(
+        (layers): Sequential(
+          (0): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          (1): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+          (2): ReLU(inplace=True)
+        )
+      )
+    )
+    (after_concat_layer): ConvBNRelu(
+      (layers): Sequential(
+        (0): Conv2d(97, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+        (1): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+        (2): ReLU(inplace=True)
+      )
+    )
+    (final_layer): Conv2d(64, 3, kernel_size=(1, 1), stride=(1, 1))
+  )
+  (noiser): Noiser()
+  (decoder): Decoder(
+    (layers): Sequential(
+      (0): ConvBNRelu(
+        (layers): Sequential(
+          (0): Conv2d(3, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          (1): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+          (2): ReLU(inplace=True)
+        )
+      )
+      (1): ConvBNRelu(
+        (layers): Sequential(
+          (0): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          (1): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+          (2): ReLU(inplace=True)
+        )
+      )
+      (2): ConvBNRelu(
+        (layers): Sequential(
+          (0): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          (1): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+          (2): ReLU(inplace=True)
+        )
+      )
+      (3): ConvBNRelu(
+        (layers): Sequential(
+          (0): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          (1): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+          (2): ReLU(inplace=True)
+        )
+      )
+      (4): ConvBNRelu(
+        (layers): Sequential(
+          (0): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          (1): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+          (2): ReLU(inplace=True)
+        )
+      )
+      (5): ConvBNRelu(
+        (layers): Sequential(
+          (0): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          (1): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+          (2): ReLU(inplace=True)
+        )
+      )
+      (6): ConvBNRelu(
+        (layers): Sequential(
+          (0): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          (1): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+          (2): ReLU(inplace=True)
+        )
+      )
+      (7): ConvBNRelu(
+        (layers): Sequential(
+          (0): Conv2d(64, 30, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          (1): BatchNorm2d(30, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+          (2): ReLU(inplace=True)
+        )
+      )
+      (8): AdaptiveAvgPool2d(output_size=(1, 1))
+    )
+    (linear): Linear(in_features=30, out_features=30, bias=True)
+  )
+)
+Discriminator(
+  (before_linear): Sequential(
+    (0): ConvBNRelu(
+      (layers): Sequential(
+        (0): Conv2d(3, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+        (1): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+        (2): ReLU(inplace=True)
+      )
+    )
+    (1): ConvBNRelu(
+      (layers): Sequential(
+        (0): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+        (1): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+        (2): ReLU(inplace=True)
+      )
+    )
+    (2): ConvBNRelu(
+      (layers): Sequential(
+        (0): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+        (1): BatchNorm2d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+        (2): ReLU(inplace=True)
+      )
+    )
+    (3): AdaptiveAvgPool2d(output_size=(1, 1))
+  )
+  (linear): Linear(in_features=64, out_features=1, bias=True)
+)
+
+Model Configuration:
+
+{'H': 128,
+ 'W': 128,
+ 'adversarial_loss': 0.001,
+ 'decoder_blocks': 7,
+ 'decoder_channels': 64,
+ 'decoder_loss': 1,
+ 'discriminator_blocks': 3,
+ 'discriminator_channels': 64,
+ 'enable_fp16': False,
+ 'encoder_blocks': 4,
+ 'encoder_channels': 64,
+ 'encoder_loss': 0.7,
+ 'message_length': 30,
+ 'use_discriminator': True,
+ 'use_vgg': False}
+
+Noise configuration:
+
+'[]'
+
+Training train_options:
+
+{'batch_size': 16,
+ 'experiment_name': 'my_hidden_experiment',
+ 'number_of_epochs': 100,
+ 'runs_folder': './runs',
+ 'start_epoch': 1,
+ 'train_folder': '/content/drive/MyDrive/my_dataset_half/train',
+ 'validation_folder': '/content/drive/MyDrive/my_dataset_half/val'}
+
+Starting epoch 1/100
+Batch size = 16
+Steps in epoch = 620
+Epoch: 1/100 Step: 10/620
+loss               0.5868
+encoder_mse        0.1870
+dec_mse            0.4552
+bitwise-error      0.5027
+adversarial_bce    0.7165
+discr_cover_bce    0.6788
+discr_encod_bce    0.6928
+----------------------------------------
+Epoch: 1/100 Step: 20/620
+loss               0.4930
+encoder_mse        0.1200
+dec_mse            0.4083
+bitwise-error      0.4948
+adversarial_bce    0.7206
+discr_cover_bce    0.6881
+discr_encod_bce    0.6803
+----------------------------------------
+Epoch: 1/100 Step: 30/620
+loss               0.4418
+encoder_mse        0.0905
+dec_mse            0.3777
+bitwise-error      0.4990
+adversarial_bce    0.7152
+discr_cover_bce    0.6797
+discr_encod_bce    0.6828
+----------------------------------------
+Epoch: 1/100 Step: 40/620
+loss               0.4085
+encoder_mse        0.0773
+dec_mse            0.3537
+bitwise-error      0.4958
+adversarial_bce    0.7200
+discr_cover_bce    0.6714
+discr_encod_bce    0.6795
+----------------------------------------
+Epoch: 1/100 Step: 50/620
+loss               0.3844
+encoder_mse        0.0676
+dec_mse            0.3363
+bitwise-error      0.4936
+adversarial_bce    0.7239
+discr_cover_bce    0.6695
+discr_encod_bce    0.6755
+----------------------------------------
+Epoch: 1/100 Step: 60/620
+loss               0.3673
+encoder_mse        0.0623
+dec_mse            0.3230
+bitwise-error      0.4906
+adversarial_bce    0.7292
+discr_cover_bce    0.6682
+discr_encod_bce    0.6699
+----------------------------------------
+Epoch: 1/100 Step: 70/620
+loss               0.3544
+encoder_mse        0.0580
+dec_mse            0.3130
+bitwise-error      0.4876
+adversarial_bce    0.7349
+discr_cover_bce    0.6631
+discr_encod_bce    0.6653
+----------------------------------------
+Epoch: 1/100 Step: 80/620
+loss               0.3446
+encoder_mse        0.0547
+dec_mse            0.3056
+bitwise-error      0.4854
+adversarial_bce    0.7394
+discr_cover_bce    0.6560
+discr_encod_bce    0.6615
+----------------------------------------
+Epoch: 1/100 Step: 90/620
+loss               0.3364
+encoder_mse        0.0515
+dec_mse            0.2997
+bitwise-error      0.4837
+adversarial_bce    0.7478
+discr_cover_bce    0.6509
+discr_encod_bce    0.6550
+----------------------------------------
+Epoch: 1/100 Step: 100/620
+loss               0.3295
+encoder_mse        0.0488
+dec_mse            0.2946
+bitwise-error      0.4811
+adversarial_bce    0.7568
+discr_cover_bce    0.6461
+discr_encod_bce    0.6488
+----------------------------------------
+Epoch: 1/100 Step: 110/620
+loss               0.3237
+encoder_mse        0.0467
+dec_mse            0.2903
+bitwise-error      0.4789
+adversarial_bce    0.7680
+discr_cover_bce    0.6397
+discr_encod_bce    0.6404
+----------------------------------------
+Epoch: 1/100 Step: 120/620
+loss               0.3183
+encoder_mse        0.0442
+dec_mse            0.2865
+bitwise-error      0.4752
+adversarial_bce    0.7790
+discr_cover_bce    0.6325
+discr_encod_bce    0.6323
+----------------------------------------
+Epoch: 1/100 Step: 130/620
+loss               0.3144
+encoder_mse        0.0425
+dec_mse            0.2838
+bitwise-error      0.4746
+adversarial_bce    0.7889
+discr_cover_bce    0.6273
+discr_encod_bce    0.6267
+----------------------------------------
+Epoch: 1/100 Step: 140/620
+loss               0.3106
+encoder_mse        0.0409
+dec_mse            0.2811
+bitwise-error      0.4726
+adversarial_bce    0.7989
+discr_cover_bce    0.6229
+discr_encod_bce    0.6205
+----------------------------------------
+Epoch: 1/100 Step: 150/620
+loss               0.3078
+encoder_mse        0.0401
+dec_mse            0.2790
+bitwise-error      0.4713
+adversarial_bce    0.8050
+discr_cover_bce    0.6183
+discr_encod_bce    0.6172
+----------------------------------------
+Epoch: 1/100 Step: 160/620
+loss               0.3052
+encoder_mse        0.0393
+dec_mse            0.2769
+bitwise-error      0.4703
+adversarial_bce    0.8125
+discr_cover_bce    0.6130
+discr_encod_bce    0.6136
+----------------------------------------
+Epoch: 1/100 Step: 170/620
+loss               0.3029
+encoder_mse        0.0386
+dec_mse            0.2750
+bitwise-error      0.4692
+adversarial_bce    0.8205
+discr_cover_bce    0.6079
+discr_encod_bce    0.6090
+----------------------------------------
+Epoch: 1/100 Step: 180/620
+loss               0.3005
+encoder_mse        0.0376
+dec_mse            0.2734
+bitwise-error      0.4676
+adversarial_bce    0.8303
+discr_cover_bce    0.6065
+discr_encod_bce    0.6029
+----------------------------------------
+Epoch: 1/100 Step: 190/620
+loss               0.2985
+encoder_mse        0.0368
+dec_mse            0.2719
+bitwise-error      0.4665
+adversarial_bce    0.8309
+discr_cover_bce    0.6029
+discr_encod_bce    0.6030
+----------------------------------------
+Epoch: 1/100 Step: 200/620
+loss               0.2966
+encoder_mse        0.0359
+dec_mse            0.2706
+bitwise-error      0.4656
+adversarial_bce    0.8353
+discr_cover_bce    0.6021
+discr_encod_bce    0.6008
+----------------------------------------
+Epoch: 1/100 Step: 210/620
+loss               0.2950
+encoder_mse        0.0353
+dec_mse            0.2695
+bitwise-error      0.4653
+adversarial_bce    0.8354
+discr_cover_bce    0.6049
+discr_encod_bce    0.6025
+----------------------------------------
+Epoch: 1/100 Step: 220/620
+loss               0.2934
+encoder_mse        0.0345
+dec_mse            0.2685
+bitwise-error      0.4644
+adversarial_bce    0.8376
+discr_cover_bce    0.6049
+discr_encod_bce    0.6036
+----------------------------------------
+Epoch: 1/100 Step: 230/620
+loss               0.2920
+encoder_mse        0.0340
+dec_mse            0.2674
+bitwise-error      0.4639
+adversarial_bce    0.8412
+discr_cover_bce    0.6073
+discr_encod_bce    0.6000
+----------------------------------------
+Epoch: 1/100 Step: 240/620
+loss               0.2906
+encoder_mse        0.0331
+dec_mse            0.2665
+bitwise-error      0.4631
+adversarial_bce    0.8392
+discr_cover_bce    0.6020
+discr_encod_bce    0.6012
+----------------------------------------
+Epoch: 1/100 Step: 250/620
+loss               0.2893
+encoder_mse        0.0326
+dec_mse            0.2657
+bitwise-error      0.4626
+adversarial_bce    0.8456
+discr_cover_bce    0.5999
+discr_encod_bce    0.5963
+----------------------------------------
+Epoch: 1/100 Step: 260/620
+loss               0.2880
+encoder_mse        0.0318
+dec_mse            0.2649
+bitwise-error      0.4618
+adversarial_bce    0.8478
+discr_cover_bce    0.5992
+discr_encod_bce    0.5959
+----------------------------------------
+Epoch: 1/100 Step: 270/620
+loss               0.2868
+encoder_mse        0.0313
+dec_mse            0.2641
+bitwise-error      0.4608
+adversarial_bce    0.8508
+discr_cover_bce    0.5998
+discr_encod_bce    0.5929
+----------------------------------------
+Epoch: 1/100 Step: 280/620
+loss               0.2857
+encoder_mse        0.0307
+dec_mse            0.2634
+bitwise-error      0.4595
+adversarial_bce    0.8523
+discr_cover_bce    0.5974
+discr_encod_bce    0.5931
+----------------------------------------
+Epoch: 1/100 Step: 290/620
+loss               0.2848
+encoder_mse        0.0304
+dec_mse            0.2627
+bitwise-error      0.4589
+adversarial_bce    0.8560
+discr_cover_bce    0.5958
+discr_encod_bce    0.5905
+----------------------------------------
+Epoch: 1/100 Step: 300/620
+loss               0.2839
+encoder_mse        0.0299
+dec_mse            0.2621
+bitwise-error      0.4579
+adversarial_bce    0.8588
+discr_cover_bce    0.5917
+discr_encod_bce    0.5888
+----------------------------------------
+Epoch: 1/100 Step: 310/620
+loss               0.2829
+encoder_mse        0.0295
+dec_mse            0.2614
+bitwise-error      0.4571
+adversarial_bce    0.8676
+discr_cover_bce    0.5897
+discr_encod_bce    0.5843
+----------------------------------------
+Epoch: 1/100 Step: 320/620
+loss               0.2821
+encoder_mse        0.0292
+dec_mse            0.2608
+bitwise-error      0.4560
+adversarial_bce    0.8717
+discr_cover_bce    0.5860
+discr_encod_bce    0.5817
+----------------------------------------
+Epoch: 1/100 Step: 330/620
+loss               0.2814
+encoder_mse        0.0289
+dec_mse            0.2603
+bitwise-error      0.4552
+adversarial_bce    0.8778
+discr_cover_bce    0.5834
+discr_encod_bce    0.5778
+----------------------------------------
+Epoch: 1/100 Step: 340/620
+loss               0.2806
+encoder_mse        0.0284
+dec_mse            0.2598
+bitwise-error      0.4545
+adversarial_bce    0.8840
+discr_cover_bce    0.5805
+discr_encod_bce    0.5746
+----------------------------------------
+Epoch: 1/100 Step: 350/620
+loss               0.2799
+encoder_mse        0.0281
+dec_mse            0.2593
+bitwise-error      0.4537
+adversarial_bce    0.8865
+discr_cover_bce    0.5776
+discr_encod_bce    0.5732
+----------------------------------------
+Epoch: 1/100 Step: 360/620
+loss               0.2790
+encoder_mse        0.0277
+dec_mse            0.2587
+bitwise-error      0.4528
+adversarial_bce    0.8974
+discr_cover_bce    0.5766
+discr_encod_bce    0.5669
+----------------------------------------
+Epoch: 1/100 Step: 370/620
+loss               0.2784
+encoder_mse        0.0274
+dec_mse            0.2583
+bitwise-error      0.4520
+adversarial_bce    0.9006
+discr_cover_bce    0.5728
+discr_encod_bce    0.5655
+----------------------------------------
+Epoch: 1/100 Step: 380/620
+loss               0.2777
+encoder_mse        0.0271
+dec_mse            0.2578
+bitwise-error      0.4515
+adversarial_bce    0.9034
+discr_cover_bce    0.5715
+discr_encod_bce    0.5633
+----------------------------------------
+Epoch: 1/100 Step: 390/620
+loss               0.2772
+encoder_mse        0.0270
+dec_mse            0.2574
+bitwise-error      0.4504
+adversarial_bce    0.9097
+discr_cover_bce    0.5681
+discr_encod_bce    0.5602
+----------------------------------------
+Epoch: 1/100 Step: 400/620
+loss               0.2766
+encoder_mse        0.0267
+dec_mse            0.2570
+bitwise-error      0.4499
+adversarial_bce    0.9139
+discr_cover_bce    0.5650
+discr_encod_bce    0.5586
+----------------------------------------
+Epoch: 1/100 Step: 410/620
+loss               0.2762
+encoder_mse        0.0265
+dec_mse            0.2566
+bitwise-error      0.4491
+adversarial_bce    0.9196
+discr_cover_bce    0.5631
+discr_encod_bce    0.5562
+----------------------------------------
+Epoch: 1/100 Step: 420/620
+loss               0.2757
+encoder_mse        0.0263
+dec_mse            0.2564
+bitwise-error      0.4489
+adversarial_bce    0.9251
+discr_cover_bce    0.5626
+discr_encod_bce    0.5532
+----------------------------------------
+Epoch: 1/100 Step: 430/620
+loss               0.2752
+encoder_mse        0.0261
+dec_mse            0.2560
+bitwise-error      0.4485
+adversarial_bce    0.9283
+discr_cover_bce    0.5589
+discr_encod_bce    0.5514
+----------------------------------------
+Epoch: 1/100 Step: 440/620
+loss               0.2748
+encoder_mse        0.0260
+dec_mse            0.2557
+bitwise-error      0.4480
+adversarial_bce    0.9355
+discr_cover_bce    0.5563
+discr_encod_bce    0.5480
+----------------------------------------
+Epoch: 1/100 Step: 450/620
+loss               0.2745
+encoder_mse        0.0259
+dec_mse            0.2554
+bitwise-error      0.4477
+adversarial_bce    0.9427
+discr_cover_bce    0.5528
+discr_encod_bce    0.5444
+----------------------------------------
+Epoch: 1/100 Step: 460/620
+loss               0.2740
+encoder_mse        0.0256
+dec_mse            0.2551
+bitwise-error      0.4473
+adversarial_bce    0.9508
+discr_cover_bce    0.5504
+discr_encod_bce    0.5405
+----------------------------------------
+Epoch: 1/100 Step: 470/620
+loss               0.2737
+encoder_mse        0.0256
+dec_mse            0.2548
+bitwise-error      0.4467
+adversarial_bce    0.9590
+discr_cover_bce    0.5485
+discr_encod_bce    0.5366
+----------------------------------------
+Epoch: 1/100 Step: 480/620
+loss               0.2732
+encoder_mse        0.0253
+dec_mse            0.2545
+bitwise-error      0.4464
+adversarial_bce    0.9612
+discr_cover_bce    0.5445
+discr_encod_bce    0.5366
+----------------------------------------
+Epoch: 1/100 Step: 490/620
+loss               0.2728
+encoder_mse        0.0251
+dec_mse            0.2543
+bitwise-error      0.4461
+adversarial_bce    0.9663
+discr_cover_bce    0.5436
+discr_encod_bce    0.5343
+----------------------------------------
+Epoch: 1/100 Step: 500/620
+loss               0.2725
+encoder_mse        0.0251
+dec_mse            0.2540
+bitwise-error      0.4458
+adversarial_bce    0.9719
+discr_cover_bce    0.5417
+discr_encod_bce    0.5319
+----------------------------------------
+Epoch: 1/100 Step: 510/620
+loss               0.2724
+encoder_mse        0.0252
+dec_mse            0.2538
+bitwise-error      0.4454
+adversarial_bce    0.9779
+discr_cover_bce    0.5388
+discr_encod_bce    0.5288
+----------------------------------------
+Epoch: 1/100 Step: 520/620
+loss               0.2720
+encoder_mse        0.0250
+dec_mse            0.2535
+bitwise-error      0.4451
+adversarial_bce    0.9857
+discr_cover_bce    0.5359
+discr_encod_bce    0.5251
+----------------------------------------
+Epoch: 1/100 Step: 530/620
+loss               0.2717
+encoder_mse        0.0249
+dec_mse            0.2533
+bitwise-error      0.4445
+adversarial_bce    0.9938
+discr_cover_bce    0.5320
+discr_encod_bce    0.5216
+----------------------------------------
+Epoch: 1/100 Step: 540/620
+loss               0.2714
+encoder_mse        0.0248
+dec_mse            0.2530
+bitwise-error      0.4440
+adversarial_bce    1.0009
+discr_cover_bce    0.5278
+discr_encod_bce    0.5180
+----------------------------------------
+Epoch: 1/100 Step: 550/620
+loss               0.2710
+encoder_mse        0.0245
+dec_mse            0.2528
+bitwise-error      0.4439
+adversarial_bce    1.0074
+discr_cover_bce    0.5242
+discr_encod_bce    0.5150
+----------------------------------------
+Epoch: 1/100 Step: 560/620
+loss               0.2708
+encoder_mse        0.0244
+dec_mse            0.2527
+bitwise-error      0.4437
+adversarial_bce    1.0149
+discr_cover_bce    0.5218
+discr_encod_bce    0.5117
+----------------------------------------
+Epoch: 1/100 Step: 570/620
+loss               0.2705
+encoder_mse        0.0243
+dec_mse            0.2524
+bitwise-error      0.4435
+adversarial_bce    1.0185
+discr_cover_bce    0.5184
+discr_encod_bce    0.5095
+----------------------------------------
+Epoch: 1/100 Step: 580/620
+loss               0.2701
+encoder_mse        0.0241
+dec_mse            0.2522
+bitwise-error      0.4432
+adversarial_bce    1.0260
+discr_cover_bce    0.5168
+discr_encod_bce    0.5068
+----------------------------------------
+Epoch: 1/100 Step: 590/620
+loss               0.2698
+encoder_mse        0.0240
+dec_mse            0.2520
+bitwise-error      0.4428
+adversarial_bce    1.0339
+discr_cover_bce    0.5152
+discr_encod_bce    0.5032
+----------------------------------------
+Epoch: 1/100 Step: 600/620
+loss               0.2696
+encoder_mse        0.0239
+dec_mse            0.2518
+bitwise-error      0.4424
+adversarial_bce    1.0405
+discr_cover_bce    0.5109
+discr_encod_bce    0.5005
+----------------------------------------
+Epoch: 1/100 Step: 610/620
+loss               0.2692
+encoder_mse        0.0237
+dec_mse            0.2516
+bitwise-error      0.4421
+adversarial_bce    1.0467
+discr_cover_bce    0.5067
+discr_encod_bce    0.4985
+----------------------------------------
+Epoch: 1/100 Step: 620/620
+loss               0.2690
+encoder_mse        0.0237
+dec_mse            0.2514
+bitwise-error      0.4419
+adversarial_bce    1.0571
+discr_cover_bce    0.5053
+discr_encod_bce    0.4941
+----------------------------------------
+Epoch 1 training duration 242.38 sec
+----------------------------------------
+Running validation for epoch 1/100

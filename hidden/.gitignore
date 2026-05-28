@@ -38,5 +38,5 @@ __pycache__/
 .ipynb_checkpoints/
 .vscode/
 data/
-runs/
 saved-runs/
+# runs/ is tracked (use Git LFS for .pyt checkpoints — see repo .gitattributes)

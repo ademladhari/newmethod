@@ -1,0 +1,2 @@
+hidden/checkpoints/**/*.pyt filter=lfs diff=lfs merge=lfs -text
+hidden/runs/**/*.pyt filter=lfs diff=lfs merge=lfs -text

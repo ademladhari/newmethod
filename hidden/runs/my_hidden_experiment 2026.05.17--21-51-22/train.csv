@@ -1,0 +1,2 @@
+epoch,loss,encoder_mse,dec_mse,bitwise-error,adversarial_bce,discr_cover_bce,discr_encod_bce,duration
+1,0.2690,0.0237,0.2514,0.4419,1.0571,0.5053,0.4941,242
