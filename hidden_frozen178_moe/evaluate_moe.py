@@ -71,9 +71,52 @@ def _bit_accuracy(decoded, message, use_sigmoid=False):
     return 1.0 - float(bit_err)
 
 
+def _empty_router_stats(num_experts: int):
+    return {
+        "selected_count": np.zeros(num_experts, dtype=np.float64),
+        "selected_weight_sum": np.zeros(num_experts, dtype=np.float64),
+        "prob_sum": np.zeros(num_experts, dtype=np.float64),
+        "sample_count": 0,
+    }
+
+
+def _update_router_stats(router_stats, router_probs, topk_indices, topk_weights):
+    probs_np = router_probs.detach().cpu().numpy()
+    indices_np = topk_indices.detach().cpu().numpy()
+    weights_np = topk_weights.detach().cpu().numpy()
+    batch_size = probs_np.shape[0]
+    router_stats["prob_sum"] += probs_np.sum(axis=0)
+    router_stats["sample_count"] += batch_size
+    for row_idx in range(indices_np.shape[0]):
+        for col_idx in range(indices_np.shape[1]):
+            expert_idx = int(indices_np[row_idx, col_idx])
+            router_stats["selected_count"][expert_idx] += 1.0
+            router_stats["selected_weight_sum"][expert_idx] += float(weights_np[row_idx, col_idx])
+
+
+def _finalize_router_stats(router_stats, top_k: int):
+    sample_count = max(1, int(router_stats["sample_count"]))
+    total_selections = max(1.0, float(sample_count * top_k))
+    selected_rate = router_stats["selected_count"] / total_selections
+    mean_selected_weight = router_stats["selected_weight_sum"] / np.maximum(router_stats["selected_count"], 1e-8)
+    mean_prob = router_stats["prob_sum"] / float(sample_count)
+    max_use = float(np.max(selected_rate))
+    max_sel = max_use * float(top_k)
+    return {
+        "expert_load": selected_rate.tolist(),
+        "expert_prob_mean": mean_prob.tolist(),
+        "expert_selected_weight_mean": mean_selected_weight.tolist(),
+        "expert_max_use": max_use,
+        "expert_max_sel": max_sel,
+    }
+
+
 def evaluate_attack(attack_layers, baseline_model, moe_model, data_loader, message_length, device):
     baseline_acc = []
     moe_acc = []
+    num_experts = moe_model._encoder_decoder_module().decoder.moe_layer.num_experts
+    top_k = moe_model._encoder_decoder_module().decoder.moe_layer.top_k
+    router_stats = _empty_router_stats(num_experts)
 
     with torch.no_grad():
         for image, _ in data_loader:
@@ -88,11 +131,15 @@ def evaluate_attack(attack_layers, baseline_model, moe_model, data_loader, messa
 
             decoded_baseline = baseline_model.encoder_decoder.decoder(noised_baseline)
             decoded_moe, router_probs, topk_indices, router_logits = moe_model.encoder_decoder.decoder(noised_moe)
+            topk_weights = torch.gather(router_probs, dim=1, index=topk_indices)
+            topk_weights = topk_weights / (topk_weights.sum(dim=1, keepdim=True) + 1e-8)
 
             baseline_acc.append(_bit_accuracy(decoded_baseline, message, use_sigmoid=False))
             moe_acc.append(_bit_accuracy(decoded_moe, message, use_sigmoid=True))
+            _update_router_stats(router_stats, router_probs, topk_indices, topk_weights=topk_weights)
 
-    return float(np.mean(baseline_acc)), float(np.mean(moe_acc))
+    finalized_router_stats = _finalize_router_stats(router_stats, top_k=top_k)
+    return float(np.mean(baseline_acc)), float(np.mean(moe_acc)), finalized_router_stats
 
 
 def main():
@@ -130,7 +177,7 @@ def main():
     print("------------|-----------------|------------|------")
 
     for attack_name, attack_layers in attacks.items():
-        baseline_acc, moe_acc = evaluate_attack(
+        baseline_acc, moe_acc, router_stats = evaluate_attack(
             attack_layers=attack_layers,
             baseline_model=baseline_model,
             moe_model=moe_model,
@@ -142,6 +189,23 @@ def main():
         print(
             "{:<11} | {:>15.4f} | {:>10.4f} | {:+.4f}".format(
                 attack_name, baseline_acc, moe_acc, delta
+            )
+        )
+        print(
+            "  MoE routing: max_use={:.4f} max_sel={:.4f} expert_load={}".format(
+                router_stats["expert_max_use"],
+                router_stats["expert_max_sel"],
+                ", ".join("{:.4f}".format(v) for v in router_stats["expert_load"]),
+            )
+        )
+        print(
+            "  MoE probs  : mean_prob={}".format(
+                ", ".join("{:.4f}".format(v) for v in router_stats["expert_prob_mean"])
+            )
+        )
+        print(
+            "  MoE weight : mean_selected_weight={}".format(
+                ", ".join("{:.4f}".format(v) for v in router_stats["expert_selected_weight_mean"])
             )
         )
 

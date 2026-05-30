@@ -22,6 +22,7 @@ class MoELayer(nn.Module):
         router_jitter_noise: float = 0.01,
         router_input_dropout: float = 0.1,
         router_temperature: float = 1.0,
+        router_force_fp32: bool = True,
         expert_dropout: float = 0.1,
         expert_init_offset_scale: float = 1e-3,
     ):
@@ -41,6 +42,7 @@ class MoELayer(nn.Module):
             jitter_noise=router_jitter_noise,
             input_dropout=router_input_dropout,
             temperature=router_temperature,
+            force_fp32=router_force_fp32,
         )
         self.experts = nn.ModuleList(
             [
@@ -78,6 +80,6 @@ class MoELayer(nn.Module):
         stacked_outputs = torch.stack(expert_outputs, dim=1)
         gather_index = topk_indices.unsqueeze(-1).expand(-1, -1, stacked_outputs.shape[-1])
         selected_outputs = torch.gather(stacked_outputs, dim=1, index=gather_index)
-        combined = torch.sum(selected_outputs * topk_weights.unsqueeze(-1), dim=1)
+        combined = torch.sum(selected_outputs * topk_weights.to(selected_outputs.dtype).unsqueeze(-1), dim=1)
         return combined, full_probs, topk_indices, router_logits
 

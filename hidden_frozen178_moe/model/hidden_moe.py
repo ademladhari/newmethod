@@ -36,6 +36,7 @@ class HiddenMoE:
         self.discriminator = Discriminator(configuration).to(device)
         self.config = configuration
         self.device = device
+        self.use_amp = bool(getattr(configuration, "enable_fp16", False) and device.type == "cuda")
 
         self.balance_loss_start_weight = getattr(configuration, "balance_loss_start_weight", 0.01)
         self.balance_loss_warmup_epochs = max(1, int(getattr(configuration, "balance_loss_warmup_epochs", 20)))
@@ -47,6 +48,9 @@ class HiddenMoE:
         self.freeze_hidden_backbone = bool(getattr(configuration, "freeze_hidden_backbone", False))
         self.freeze_discriminator = bool(getattr(configuration, "freeze_discriminator", False))
         self.init_hidden_checkpoint = str(getattr(configuration, "init_hidden_checkpoint", ""))
+        self.router_fp32 = bool(getattr(configuration, "router_fp32", True))
+        self.scaler_enc_dec = torch.cuda.amp.GradScaler(enabled=self.use_amp)
+        self.scaler_discrim = torch.cuda.amp.GradScaler(enabled=self.use_amp)
 
         self.optimizer_enc_dec = None
         self.optimizer_discrim = None
@@ -109,6 +113,11 @@ class HiddenMoE:
         if isinstance(self.discriminator, nn.DataParallel):
             return self.discriminator.module
         return self.discriminator
+
+    def _autocast_context(self):
+        if self.use_amp:
+            return torch.autocast(device_type="cuda", dtype=torch.float16)
+        return torch.autocast(device_type=self.device.type, enabled=False)
 
     def enable_multi_gpu(self) -> int:
         """Wrap encoder-decoder and discriminator in DataParallel when multiple GPUs exist."""
@@ -296,65 +305,88 @@ class HiddenMoE:
             g_target_label_encoded = torch.full((batch_size, 1), self.cover_label, device=self.device)
 
             if self.optimizer_discrim is not None:
-                self.optimizer_discrim.zero_grad()
-                d_on_cover = self.discriminator(images)
-                d_loss_on_cover = self.bce_with_logits_loss(d_on_cover, d_target_label_cover.float())
-                d_loss_on_cover.backward()
-            else:
-                with torch.no_grad():
+                self.optimizer_discrim.zero_grad(set_to_none=True)
+                with self._autocast_context():
                     d_on_cover = self.discriminator(images)
                     d_loss_on_cover = self.bce_with_logits_loss(d_on_cover, d_target_label_cover.float())
+                if self.use_amp:
+                    self.scaler_discrim.scale(d_loss_on_cover).backward()
+                else:
+                    d_loss_on_cover.backward()
+            else:
+                with torch.no_grad():
+                    with self._autocast_context():
+                        d_on_cover = self.discriminator(images)
+                        d_loss_on_cover = self.bce_with_logits_loss(d_on_cover, d_target_label_cover.float())
 
             noiser = self._encoder_decoder_module().noiser
             noiser.pick_batch_expert()
             try:
-                encoded_images, noised_images, decoded_messages, router_probs, topk_indices, router_logits = self.encoder_decoder(
-                    images, messages
-                )
+                with self._autocast_context():
+                    encoded_images, noised_images, decoded_messages, router_probs, topk_indices, router_logits = self.encoder_decoder(
+                        images, messages
+                    )
             finally:
                 noiser.clear_batch_expert()
 
             if self.optimizer_discrim is not None:
-                d_on_encoded = self.discriminator(encoded_images.detach())
-                d_loss_on_encoded = self.bce_with_logits_loss(d_on_encoded, d_target_label_encoded.float())
-                d_loss_on_encoded.backward()
-                self.optimizer_discrim.step()
-            else:
-                with torch.no_grad():
+                with self._autocast_context():
                     d_on_encoded = self.discriminator(encoded_images.detach())
                     d_loss_on_encoded = self.bce_with_logits_loss(d_on_encoded, d_target_label_encoded.float())
-
-            self.optimizer_enc_dec.zero_grad()
-            d_on_encoded_for_enc = self.discriminator(encoded_images)
-            g_loss_adv = self.bce_with_logits_loss(d_on_encoded_for_enc, g_target_label_encoded.float())
-
-            if self.vgg_loss is None:
-                g_loss_enc = self.mse_loss(encoded_images, images)
+                if self.use_amp:
+                    self.scaler_discrim.scale(d_loss_on_encoded).backward()
+                    self.scaler_discrim.step(self.optimizer_discrim)
+                    self.scaler_discrim.update()
+                else:
+                    d_loss_on_encoded.backward()
+                    self.optimizer_discrim.step()
             else:
-                vgg_on_cov = self.vgg_loss(images)
-                vgg_on_enc = self.vgg_loss(encoded_images)
-                g_loss_enc = self.mse_loss(vgg_on_cov, vgg_on_enc)
+                with torch.no_grad():
+                    with self._autocast_context():
+                        d_on_encoded = self.discriminator(encoded_images.detach())
+                        d_loss_on_encoded = self.bce_with_logits_loss(d_on_encoded, d_target_label_encoded.float())
 
-            g_loss_dec = self.bce_with_logits_loss(decoded_messages, messages.float())
-            g_loss_bal, expert_load = self._calc_balance_loss(router_probs, topk_indices)
-            g_loss_z = self._calc_router_z_loss(router_logits)
-            router_entropy = self._calc_router_entropy(router_probs)
-            expert_weight_similarity = self._calc_expert_weight_similarity()
-            g_loss = (
-                self.config.adversarial_loss * g_loss_adv
-                + self.config.encoder_loss * g_loss_enc
-                + self.config.decoder_loss * g_loss_dec
-                + self.current_balance_loss_weight * g_loss_bal
-                + self.router_z_loss_weight * g_loss_z
-            )
-            g_loss.backward()
+            self.optimizer_enc_dec.zero_grad(set_to_none=True)
+            with self._autocast_context():
+                d_on_encoded_for_enc = self.discriminator(encoded_images)
+                g_loss_adv = self.bce_with_logits_loss(d_on_encoded_for_enc, g_target_label_encoded.float())
+
+                if self.vgg_loss is None:
+                    g_loss_enc = self.mse_loss(encoded_images, images)
+                else:
+                    vgg_on_cov = self.vgg_loss(images)
+                    vgg_on_enc = self.vgg_loss(encoded_images)
+                    g_loss_enc = self.mse_loss(vgg_on_cov, vgg_on_enc)
+
+                g_loss_dec = self.bce_with_logits_loss(decoded_messages, messages.float())
+                g_loss_bal, expert_load = self._calc_balance_loss(router_probs, topk_indices)
+                g_loss_z = self._calc_router_z_loss(router_logits)
+                router_entropy = self._calc_router_entropy(router_probs)
+                expert_weight_similarity = self._calc_expert_weight_similarity()
+                g_loss = (
+                    self.config.adversarial_loss * g_loss_adv
+                    + self.config.encoder_loss * g_loss_enc
+                    + self.config.decoder_loss * g_loss_dec
+                    + self.current_balance_loss_weight * g_loss_bal
+                    + self.router_z_loss_weight * g_loss_z
+                )
+            if self.use_amp:
+                self.scaler_enc_dec.scale(g_loss).backward()
+            else:
+                g_loss.backward()
             if self.router_grad_clip_norm > 0:
+                if self.use_amp:
+                    self.scaler_enc_dec.unscale_(self.optimizer_enc_dec)
                 router_params = self._encoder_decoder_module().decoder.moe_layer.router.parameters()
                 router_grad_norm = torch.nn.utils.clip_grad_norm_(router_params, self.router_grad_clip_norm)
                 router_grad_norm_value = float(router_grad_norm.detach().cpu().item())
             else:
                 router_grad_norm_value = 0.0
-            self.optimizer_enc_dec.step()
+            if self.use_amp:
+                self.scaler_enc_dec.step(self.optimizer_enc_dec)
+                self.scaler_enc_dec.update()
+            else:
+                self.optimizer_enc_dec.step()
 
         decoded_rounded = torch.sigmoid(decoded_messages).detach().cpu().numpy().round().clip(0, 1)
         bitwise_avg_err = np.sum(np.abs(decoded_rounded - messages.detach().cpu().numpy())) / (
@@ -403,42 +435,45 @@ class HiddenMoE:
             d_target_label_encoded = torch.full((batch_size, 1), self.encoded_label, device=self.device)
             g_target_label_encoded = torch.full((batch_size, 1), self.cover_label, device=self.device)
 
-            d_on_cover = self.discriminator(images)
-            d_loss_on_cover = self.bce_with_logits_loss(d_on_cover, d_target_label_cover.float())
+            with self._autocast_context():
+                d_on_cover = self.discriminator(images)
+                d_loss_on_cover = self.bce_with_logits_loss(d_on_cover, d_target_label_cover.float())
 
             noiser = self._encoder_decoder_module().noiser
             noiser.pick_batch_expert()
             try:
-                encoded_images, noised_images, decoded_messages, router_probs, topk_indices, router_logits = self.encoder_decoder(
-                    images, messages
-                )
+                with self._autocast_context():
+                    encoded_images, noised_images, decoded_messages, router_probs, topk_indices, router_logits = self.encoder_decoder(
+                        images, messages
+                    )
             finally:
                 noiser.clear_batch_expert()
 
-            d_on_encoded = self.discriminator(encoded_images)
-            d_loss_on_encoded = self.bce_with_logits_loss(d_on_encoded, d_target_label_encoded.float())
-            d_on_encoded_for_enc = self.discriminator(encoded_images)
-            g_loss_adv = self.bce_with_logits_loss(d_on_encoded_for_enc, g_target_label_encoded.float())
+            with self._autocast_context():
+                d_on_encoded = self.discriminator(encoded_images)
+                d_loss_on_encoded = self.bce_with_logits_loss(d_on_encoded, d_target_label_encoded.float())
+                d_on_encoded_for_enc = self.discriminator(encoded_images)
+                g_loss_adv = self.bce_with_logits_loss(d_on_encoded_for_enc, g_target_label_encoded.float())
 
-            if self.vgg_loss is None:
-                g_loss_enc = self.mse_loss(encoded_images, images)
-            else:
-                vgg_on_cov = self.vgg_loss(images)
-                vgg_on_enc = self.vgg_loss(encoded_images)
-                g_loss_enc = self.mse_loss(vgg_on_cov, vgg_on_enc)
+                if self.vgg_loss is None:
+                    g_loss_enc = self.mse_loss(encoded_images, images)
+                else:
+                    vgg_on_cov = self.vgg_loss(images)
+                    vgg_on_enc = self.vgg_loss(encoded_images)
+                    g_loss_enc = self.mse_loss(vgg_on_cov, vgg_on_enc)
 
-            g_loss_dec = self.bce_with_logits_loss(decoded_messages, messages.float())
-            g_loss_bal, expert_load = self._calc_balance_loss(router_probs, topk_indices)
-            g_loss_z = self._calc_router_z_loss(router_logits)
-            router_entropy = self._calc_router_entropy(router_probs)
-            expert_weight_similarity = self._calc_expert_weight_similarity()
-            g_loss = (
-                self.config.adversarial_loss * g_loss_adv
-                + self.config.encoder_loss * g_loss_enc
-                + self.config.decoder_loss * g_loss_dec
-                + self.current_balance_loss_weight * g_loss_bal
-                + self.router_z_loss_weight * g_loss_z
-            )
+                g_loss_dec = self.bce_with_logits_loss(decoded_messages, messages.float())
+                g_loss_bal, expert_load = self._calc_balance_loss(router_probs, topk_indices)
+                g_loss_z = self._calc_router_z_loss(router_logits)
+                router_entropy = self._calc_router_entropy(router_probs)
+                expert_weight_similarity = self._calc_expert_weight_similarity()
+                g_loss = (
+                    self.config.adversarial_loss * g_loss_adv
+                    + self.config.encoder_loss * g_loss_enc
+                    + self.config.decoder_loss * g_loss_dec
+                    + self.current_balance_loss_weight * g_loss_bal
+                    + self.router_z_loss_weight * g_loss_z
+                )
 
         decoded_rounded = torch.sigmoid(decoded_messages).detach().cpu().numpy().round().clip(0, 1)
         bitwise_avg_err = np.sum(np.abs(decoded_rounded - messages.detach().cpu().numpy())) / (

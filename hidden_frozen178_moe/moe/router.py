@@ -16,6 +16,7 @@ class Router(nn.Module):
         jitter_noise: float = 0.01,
         input_dropout: float = 0.1,
         temperature: float = 1.0,
+        force_fp32: bool = False,
     ):
         super(Router, self).__init__()
         if top_k <= 0:
@@ -27,6 +28,7 @@ class Router(nn.Module):
         self.top_k = top_k
         self.jitter_noise = jitter_noise
         self.temperature = temperature
+        self.force_fp32 = bool(force_fp32)
         self.input_dropout = nn.Dropout(p=max(0.0, min(1.0, input_dropout)))
         hidden_dim = max(input_dim // 2, 32)
 
@@ -40,6 +42,18 @@ class Router(nn.Module):
         self.temperature = max(float(temperature), 1e-4)
 
     def forward(self, features_flat: torch.Tensor):
+        if self.force_fp32 and torch.is_autocast_enabled():
+            with torch.autocast(device_type=features_flat.device.type, enabled=False):
+                dropped_features = self.input_dropout(features_flat.float())
+                logits = self.mlp(dropped_features).float()
+                if self.training and self.jitter_noise > 0:
+                    logits = logits + torch.randn_like(logits) * self.jitter_noise
+                scaled_logits = logits / max(self.temperature, 1e-4)
+                full_probs = F.softmax(scaled_logits, dim=1)
+                topk_weights, topk_indices = torch.topk(full_probs, k=self.top_k, dim=1)
+                topk_weights = topk_weights / (topk_weights.sum(dim=1, keepdim=True) + 1e-8)
+            return topk_indices, topk_weights, full_probs, scaled_logits
+
         dropped_features = self.input_dropout(features_flat)
         logits = self.mlp(dropped_features).float()
         if self.training and self.jitter_noise > 0:

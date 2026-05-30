@@ -188,6 +188,18 @@ def main():
     new_run_parser.add_argument("--router-temperature-start", default=1.0, type=float, help="Initial router temperature.")
     new_run_parser.add_argument("--router-temperature-end", default=1.0, type=float, help="Final router temperature.")
     new_run_parser.add_argument(
+        "--router-fp32",
+        dest="router_fp32",
+        action="store_true",
+        help="Run router logits/softmax in FP32 even under AMP.",
+    )
+    new_run_parser.add_argument(
+        "--no-router-fp32",
+        dest="router_fp32",
+        action="store_false",
+        help="Allow router to run in mixed precision under AMP.",
+    )
+    new_run_parser.add_argument(
         "--router-grad-clip-norm",
         default=1.0,
         type=float,
@@ -249,6 +261,7 @@ def main():
     )
     new_run_parser.set_defaults(tensorboard=False)
     new_run_parser.set_defaults(enable_fp16=False)
+    new_run_parser.set_defaults(router_fp32=True)
 
     continue_parser = subparsers.add_parser("continue", help="Continue an existing MoE run")
     continue_parser.add_argument("--folder", "-f", required=True, type=str, help="Run folder path.")
@@ -291,6 +304,13 @@ def main():
         type=str,
         help="Optional override for freeze_discriminator from stored config.",
     )
+    continue_parser.add_argument(
+        "--router-fp32",
+        default=None,
+        choices=["true", "false"],
+        type=str,
+        help="Optional override for router_fp32 from stored config.",
+    )
 
     args = parser.parse_args()
     print_each = args.print_each
@@ -311,6 +331,7 @@ def main():
             ("router_temperature_start", 1.0),
             ("router_temperature_end", 1.0),
             ("router_grad_clip_norm", 1.0),
+            ("router_fp32", True),
             ("balance_loss_start_weight", 0.01),
             ("balance_loss_warmup_epochs", 20),
             ("expert_dropout", 0.1),
@@ -326,6 +347,8 @@ def main():
             hidden_config.freeze_hidden_backbone = args.freeze_hidden_backbone.lower() == "true"
         if args.freeze_discriminator is not None:
             hidden_config.freeze_discriminator = args.freeze_discriminator.lower() == "true"
+        if args.router_fp32 is not None:
+            hidden_config.router_fp32 = args.router_fp32.lower() == "true"
         checkpoint, loaded_checkpoint_file_name = utils.load_last_checkpoint(os.path.join(this_run_folder, "checkpoints"))
         train_options.start_epoch = checkpoint["epoch"] + 1
         if args.data_dir is not None:
@@ -376,6 +399,7 @@ def main():
             router_temperature_start=args.router_temperature_start,
             router_temperature_end=args.router_temperature_end,
             router_grad_clip_norm=args.router_grad_clip_norm,
+            router_fp32=args.router_fp32,
             expert_dropout=args.expert_dropout,
             expert_weight_decay=args.expert_weight_decay,
             expert_init_offset_scale=args.expert_init_offset_scale,
