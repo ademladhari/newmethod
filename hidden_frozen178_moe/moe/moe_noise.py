@@ -133,8 +133,10 @@ class MoENoiseLayer(nn.Module):
             )
         return noised_and_cover
 
-    def forward(self, encoded_and_cover):
-        if not self.training:
+    def forward(self, encoded_and_cover, apply_attack=None):
+        if apply_attack is None:
+            apply_attack = self.training
+        if not apply_attack:
             self._selected_expert_idx = 0
             return self.identity(encoded_and_cover)
 

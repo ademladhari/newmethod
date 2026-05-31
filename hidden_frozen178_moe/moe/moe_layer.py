@@ -25,6 +25,7 @@ class MoELayer(nn.Module):
         router_force_fp32: bool = True,
         expert_dropout: float = 0.1,
         expert_init_offset_scale: float = 1e-3,
+        expert_use_group_norm: bool = False,
     ):
         super(MoELayer, self).__init__()
         self.num_experts = num_experts
@@ -51,6 +52,7 @@ class MoELayer(nn.Module):
                     expert_channels=expert_channels,
                     message_length=message_length,
                     dropout=expert_dropout,
+                    use_group_norm=expert_use_group_norm,
                 )
                 for _ in range(num_experts)
             ]

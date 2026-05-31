@@ -41,6 +41,14 @@ class Router(nn.Module):
     def set_temperature(self, temperature: float):
         self.temperature = max(float(temperature), 1e-4)
 
+    @staticmethod
+    def _select_topk(scaled_logits: torch.Tensor, full_probs: torch.Tensor, top_k: int):
+        """Select experts by logits; normalize weights from softmax of selected logits."""
+        _, topk_indices = torch.topk(scaled_logits, k=top_k, dim=1)
+        selected_logits = torch.gather(scaled_logits, dim=1, index=topk_indices)
+        topk_weights = F.softmax(selected_logits, dim=1)
+        return topk_indices, topk_weights, full_probs, scaled_logits
+
     def forward(self, features_flat: torch.Tensor):
         if self.force_fp32 and torch.is_autocast_enabled():
             with torch.autocast(device_type=features_flat.device.type, enabled=False):
@@ -50,9 +58,7 @@ class Router(nn.Module):
                     logits = logits + torch.randn_like(logits) * self.jitter_noise
                 scaled_logits = logits / max(self.temperature, 1e-4)
                 full_probs = F.softmax(scaled_logits, dim=1)
-                topk_weights, topk_indices = torch.topk(full_probs, k=self.top_k, dim=1)
-                topk_weights = topk_weights / (topk_weights.sum(dim=1, keepdim=True) + 1e-8)
-            return topk_indices, topk_weights, full_probs, scaled_logits
+                return self._select_topk(scaled_logits, full_probs, self.top_k)
 
         dropped_features = self.input_dropout(features_flat)
         logits = self.mlp(dropped_features).float()
@@ -60,7 +66,5 @@ class Router(nn.Module):
             logits = logits + torch.randn_like(logits) * self.jitter_noise
         scaled_logits = logits / max(self.temperature, 1e-4)
         full_probs = F.softmax(scaled_logits, dim=1)
-        topk_weights, topk_indices = torch.topk(full_probs, k=self.top_k, dim=1)
-        topk_weights = topk_weights / (topk_weights.sum(dim=1, keepdim=True) + 1e-8)
-        return topk_indices, topk_weights, full_probs, scaled_logits
+        return self._select_topk(scaled_logits, full_probs, self.top_k)
 

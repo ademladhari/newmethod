@@ -31,6 +31,9 @@ class HiDDenMoEConfiguration(HiDDenConfiguration):
         router_temperature_end: float = 1.0,
         router_grad_clip_norm: float = 1.0,
         router_fp32: bool = True,
+        load_penalty_weight: float = 0.0,
+        load_penalty_type: str = "max",
+        expert_use_group_norm: bool = False,
         expert_dropout: float = 0.1,
         expert_weight_decay: float = 1e-4,
         expert_init_offset_scale: float = 1e-3,
@@ -67,6 +70,9 @@ class HiDDenMoEConfiguration(HiDDenConfiguration):
         self.router_temperature_end = router_temperature_end
         self.router_grad_clip_norm = router_grad_clip_norm
         self.router_fp32 = router_fp32
+        self.load_penalty_weight = load_penalty_weight
+        self.load_penalty_type = load_penalty_type
+        self.expert_use_group_norm = expert_use_group_norm
         self.expert_dropout = expert_dropout
         self.expert_weight_decay = expert_weight_decay
         self.expert_init_offset_scale = expert_init_offset_scale

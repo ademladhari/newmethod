@@ -28,6 +28,44 @@ def log_progress_and_flush(losses_accu):
     sys.stdout.flush()
 
 
+def run_validation_pass(model, val_data, device, hidden_config, this_run_folder, epoch, number_of_epochs, apply_training_noise, images_to_save, saved_images_size):
+    validation_losses = defaultdict(AverageMeter)
+    val_batches = 0
+    first_iteration = True
+    mode_label = "noisy" if apply_training_noise else "clean"
+    logging.info("Running {} validation for epoch {}/{}".format(mode_label, epoch, number_of_epochs))
+    for image, _ in val_data:
+        val_batches += 1
+        image = image.to(device)
+        message = torch.Tensor(np.random.choice([0, 1], (image.shape[0], hidden_config.message_length))).to(device)
+        losses, (encoded_images, noised_images, decoded_messages, router_probs, topk_indices, router_logits) = model.validate_on_batch(
+            [image, message],
+            apply_training_noise=apply_training_noise,
+        )
+        for name, loss in losses.items():
+            validation_losses[name].update(loss)
+        if first_iteration and not apply_training_noise:
+            if hidden_config.enable_fp16:
+                image = image.float()
+                encoded_images = encoded_images.float()
+            utils.save_images(
+                image.cpu()[:images_to_save, :, :, :],
+                encoded_images[:images_to_save, :, :, :].cpu(),
+                epoch,
+                os.path.join(this_run_folder, "images"),
+                resize_to=saved_images_size,
+            )
+            first_iteration = False
+
+    if val_batches > 0:
+        log_progress_and_flush(validation_losses)
+    else:
+        logging.warning("Validation skipped because no validation batches were found.")
+    logging.info("-" * 40)
+    sys.stdout.flush()
+    return validation_losses, val_batches
+
+
 def train(
     model: HiddenMoE,
     device: torch.device,
@@ -104,53 +142,52 @@ def train(
             tb_logger.save_grads(epoch)
             tb_logger.save_tensors(epoch)
 
-        first_iteration = True
-        val_batches = 0
-        validation_losses = defaultdict(AverageMeter)
-        logging.info("Running validation for epoch {}/{}".format(epoch, train_options.number_of_epochs))
-        for image, _ in val_data:
-            val_batches += 1
-            image = image.to(device)
-            message = torch.Tensor(np.random.choice([0, 1], (image.shape[0], hidden_config.message_length))).to(device)
-            losses, (encoded_images, noised_images, decoded_messages, router_probs, topk_indices, router_logits) = model.validate_on_batch([image, message])
-            for name, loss in losses.items():
-                validation_losses[name].update(loss)
-            if first_iteration:
-                if hidden_config.enable_fp16:
-                    image = image.float()
-                    encoded_images = encoded_images.float()
-                utils.save_images(
-                    image.cpu()[:images_to_save, :, :, :],
-                    encoded_images[:images_to_save, :, :, :].cpu(),
-                    epoch,
-                    os.path.join(this_run_folder, "images"),
-                    resize_to=saved_images_size,
-                )
-                first_iteration = False
-
-        if val_batches > 0:
-            log_progress_and_flush(validation_losses)
-        else:
-            logging.warning(
-                "Validation skipped for epoch {} because no validation batches were found in {}.".format(
-                    epoch, train_options.validation_folder
-                )
-            )
-        logging.info("-" * 40)
-        sys.stdout.flush()
-        should_save_checkpoint = (epoch % save_every == 0) or (epoch == train_options.number_of_epochs)
-        if should_save_checkpoint:
-            model.save_checkpoint(
-                train_options.experiment_name,
-                epoch,
-                os.path.join(this_run_folder, "checkpoints"),
-            )
+        validation_losses, val_batches = run_validation_pass(
+            model,
+            val_data,
+            device,
+            hidden_config,
+            this_run_folder,
+            epoch,
+            train_options.number_of_epochs,
+            apply_training_noise=False,
+            images_to_save=images_to_save,
+            saved_images_size=saved_images_size,
+        )
         if val_batches > 0:
             utils.write_losses(
                 os.path.join(this_run_folder, "validation.csv"),
                 validation_losses,
                 epoch,
                 time.time() - epoch_start,
+            )
+
+        validation_noisy_losses, val_noisy_batches = run_validation_pass(
+            model,
+            val_data,
+            device,
+            hidden_config,
+            this_run_folder,
+            epoch,
+            train_options.number_of_epochs,
+            apply_training_noise=True,
+            images_to_save=images_to_save,
+            saved_images_size=saved_images_size,
+        )
+        if val_noisy_batches > 0:
+            utils.write_losses(
+                os.path.join(this_run_folder, "validation_noisy.csv"),
+                validation_noisy_losses,
+                epoch,
+                time.time() - epoch_start,
+            )
+
+        should_save_checkpoint = (epoch % save_every == 0) or (epoch == train_options.number_of_epochs)
+        if should_save_checkpoint:
+            model.save_checkpoint(
+                train_options.experiment_name,
+                epoch,
+                os.path.join(this_run_folder, "checkpoints"),
             )
 
 
@@ -204,6 +241,24 @@ def main():
         default=1.0,
         type=float,
         help="Clip norm threshold for router gradients (0 disables).",
+    )
+    new_run_parser.add_argument(
+        "--load-penalty-weight",
+        default=0.0,
+        type=float,
+        help="Weight for explicit expert load skew penalty.",
+    )
+    new_run_parser.add_argument(
+        "--load-penalty-type",
+        default="max",
+        choices=["max", "variance"],
+        type=str,
+        help="Load penalty type: max (peak load) or variance (spread).",
+    )
+    new_run_parser.add_argument(
+        "--expert-use-group-norm",
+        action="store_true",
+        help="Use GroupNorm instead of BatchNorm inside MoE experts.",
     )
     new_run_parser.add_argument("--expert-dropout", default=0.1, type=float, help="Dropout used inside each expert.")
     new_run_parser.add_argument(
@@ -332,6 +387,9 @@ def main():
             ("router_temperature_end", 1.0),
             ("router_grad_clip_norm", 1.0),
             ("router_fp32", True),
+            ("load_penalty_weight", 0.0),
+            ("load_penalty_type", "max"),
+            ("expert_use_group_norm", False),
             ("balance_loss_start_weight", 0.01),
             ("balance_loss_warmup_epochs", 20),
             ("expert_dropout", 0.1),
@@ -400,6 +458,9 @@ def main():
             router_temperature_end=args.router_temperature_end,
             router_grad_clip_norm=args.router_grad_clip_norm,
             router_fp32=args.router_fp32,
+            load_penalty_weight=args.load_penalty_weight,
+            load_penalty_type=args.load_penalty_type,
+            expert_use_group_norm=args.expert_use_group_norm,
             expert_dropout=args.expert_dropout,
             expert_weight_decay=args.expert_weight_decay,
             expert_init_offset_scale=args.expert_init_offset_scale,

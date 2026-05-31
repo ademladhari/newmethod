@@ -20,9 +20,9 @@ class EncoderDecoderMoE(nn.Module):
         self.noiser = noiser
         self.decoder = MoEDecoder(config)
 
-    def forward(self, image, message):
+    def forward(self, image, message, apply_training_noise=False):
         encoded_image = self.encoder(image, message)
-        noised_and_cover = self.noiser([encoded_image, image])
+        noised_and_cover = self.noiser([encoded_image, image], apply_attack=apply_training_noise)
         noised_image = noised_and_cover[0]
         decoded_message, router_probs, topk_indices, router_logits = self.decoder(noised_image)
         return encoded_image, noised_image, decoded_message, router_probs, topk_indices, router_logits
@@ -49,6 +49,8 @@ class HiddenMoE:
         self.freeze_discriminator = bool(getattr(configuration, "freeze_discriminator", False))
         self.init_hidden_checkpoint = str(getattr(configuration, "init_hidden_checkpoint", ""))
         self.router_fp32 = bool(getattr(configuration, "router_fp32", True))
+        self.load_penalty_weight = max(0.0, float(getattr(configuration, "load_penalty_weight", 0.0)))
+        self.load_penalty_type = str(getattr(configuration, "load_penalty_type", "max"))
         self.scaler_enc_dec = torch.cuda.amp.GradScaler(enabled=self.use_amp)
         self.scaler_discrim = torch.cuda.amp.GradScaler(enabled=self.use_amp)
 
@@ -268,7 +270,30 @@ class HiddenMoE:
         topk_one_hot = torch.nn.functional.one_hot(topk_indices, num_classes=num_experts).float()
         load = torch.mean(topk_one_hot.reshape(-1, num_experts), dim=0)
         balance_loss = num_experts * torch.sum(importance * load)
-        return balance_loss, load
+        return balance_loss, load, importance
+
+    def _calc_load_penalty(self, expert_load: torch.Tensor):
+        if self.load_penalty_weight <= 0:
+            zero = torch.tensor(0.0, device=expert_load.device)
+            return zero, 0.0
+        if self.load_penalty_type == "variance":
+            penalty = torch.var(expert_load)
+        else:
+            penalty = torch.max(expert_load)
+        return penalty, float(penalty.detach().cpu().item())
+
+    def _append_routing_metrics(self, losses, router_probs, expert_load, topk_indices):
+        _, _, importance = self._calc_balance_loss(router_probs, topk_indices)
+        router_entropy = self._calc_router_entropy(router_probs)
+        losses["effective_experts"] = float(torch.exp(router_entropy.detach()).cpu().item())
+        losses["expert_max_importance"] = float(torch.max(importance).detach().cpu().item())
+        for idx, importance_value in enumerate(importance.detach().cpu().tolist()):
+            losses["expert_importance_{} ".format(idx)] = float(importance_value)
+        for idx, load_value in enumerate(expert_load.detach().cpu().tolist()):
+            losses["expert_load_{} ".format(idx)] = float(load_value)
+        losses["expert_max_use "] = float(torch.max(expert_load).detach().cpu().item())
+        losses["expert_max_sel "] = float(torch.max(expert_load).detach().cpu().item() * topk_indices.shape[1])
+        return losses
 
     @staticmethod
     def _calc_router_z_loss(router_logits: torch.Tensor):
@@ -324,7 +349,7 @@ class HiddenMoE:
             try:
                 with self._autocast_context():
                     encoded_images, noised_images, decoded_messages, router_probs, topk_indices, router_logits = self.encoder_decoder(
-                        images, messages
+                        images, messages, apply_training_noise=False
                     )
             finally:
                 noiser.clear_batch_expert()
@@ -359,7 +384,8 @@ class HiddenMoE:
                     g_loss_enc = self.mse_loss(vgg_on_cov, vgg_on_enc)
 
                 g_loss_dec = self.bce_with_logits_loss(decoded_messages, messages.float())
-                g_loss_bal, expert_load = self._calc_balance_loss(router_probs, topk_indices)
+                g_loss_bal, expert_load, _ = self._calc_balance_loss(router_probs, topk_indices)
+                g_loss_load, load_penalty_value = self._calc_load_penalty(expert_load)
                 g_loss_z = self._calc_router_z_loss(router_logits)
                 router_entropy = self._calc_router_entropy(router_probs)
                 expert_weight_similarity = self._calc_expert_weight_similarity()
@@ -368,6 +394,7 @@ class HiddenMoE:
                     + self.config.encoder_loss * g_loss_enc
                     + self.config.decoder_loss * g_loss_dec
                     + self.current_balance_loss_weight * g_loss_bal
+                    + self.load_penalty_weight * g_loss_load
                     + self.router_z_loss_weight * g_loss_z
                 )
             if self.use_amp:
@@ -398,6 +425,7 @@ class HiddenMoE:
             "encoder_mse    ": g_loss_enc.item(),
             "dec_bce        ": g_loss_dec.item(),
             "balance_loss   ": g_loss_bal.item(),
+            "load_penalty   ": load_penalty_value,
             "router_z_loss  ": g_loss_z.item(),
             "router_entropy ": router_entropy.item(),
             "router_grad_norm": router_grad_norm_value,
@@ -407,14 +435,11 @@ class HiddenMoE:
             "adversarial_bce": g_loss_adv.item(),
             "discr_cover_bce": d_loss_on_cover.item(),
             "discr_encod_bce": d_loss_on_encoded.item(),
-            "expert_max_use ": float(torch.max(expert_load).detach().cpu().item()),
-            "expert_max_sel ": float(torch.max(expert_load).detach().cpu().item() * topk_indices.shape[1]),
         }
-        for idx, load_value in enumerate(expert_load.detach().cpu().tolist()):
-            losses["expert_load_{} ".format(idx)] = float(load_value)
+        losses = self._append_routing_metrics(losses, router_probs, expert_load, topk_indices)
         return losses, (encoded_images, noised_images, decoded_messages, router_probs, topk_indices, router_logits)
 
-    def validate_on_batch(self, batch: list):
+    def validate_on_batch(self, batch: list, apply_training_noise: bool = False):
         if self.tb_logger is not None:
             encoder_decoder = self._encoder_decoder_module()
             discriminator = self._discriminator_module()
@@ -444,7 +469,7 @@ class HiddenMoE:
             try:
                 with self._autocast_context():
                     encoded_images, noised_images, decoded_messages, router_probs, topk_indices, router_logits = self.encoder_decoder(
-                        images, messages
+                        images, messages, apply_training_noise=apply_training_noise
                     )
             finally:
                 noiser.clear_batch_expert()
@@ -463,7 +488,8 @@ class HiddenMoE:
                     g_loss_enc = self.mse_loss(vgg_on_cov, vgg_on_enc)
 
                 g_loss_dec = self.bce_with_logits_loss(decoded_messages, messages.float())
-                g_loss_bal, expert_load = self._calc_balance_loss(router_probs, topk_indices)
+                g_loss_bal, expert_load, _ = self._calc_balance_loss(router_probs, topk_indices)
+                _, load_penalty_value = self._calc_load_penalty(expert_load)
                 g_loss_z = self._calc_router_z_loss(router_logits)
                 router_entropy = self._calc_router_entropy(router_probs)
                 expert_weight_similarity = self._calc_expert_weight_similarity()
@@ -484,6 +510,7 @@ class HiddenMoE:
             "encoder_mse    ": g_loss_enc.item(),
             "dec_bce        ": g_loss_dec.item(),
             "balance_loss   ": g_loss_bal.item(),
+            "load_penalty   ": load_penalty_value,
             "router_z_loss  ": g_loss_z.item(),
             "router_entropy ": router_entropy.item(),
             "expert_w_cos  ": float(expert_weight_similarity.detach().cpu().item()),
@@ -492,11 +519,8 @@ class HiddenMoE:
             "adversarial_bce": g_loss_adv.item(),
             "discr_cover_bce": d_loss_on_cover.item(),
             "discr_encod_bce": d_loss_on_encoded.item(),
-            "expert_max_use ": float(torch.max(expert_load).detach().cpu().item()),
-            "expert_max_sel ": float(torch.max(expert_load).detach().cpu().item() * topk_indices.shape[1]),
         }
-        for idx, load_value in enumerate(expert_load.detach().cpu().tolist()):
-            losses["expert_load_{} ".format(idx)] = float(load_value)
+        losses = self._append_routing_metrics(losses, router_probs, expert_load, topk_indices)
         return losses, (encoded_images, noised_images, decoded_messages, router_probs, topk_indices, router_logits)
 
     def to_stirng(self):

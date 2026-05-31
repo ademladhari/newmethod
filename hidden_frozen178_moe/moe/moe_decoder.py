@@ -32,6 +32,7 @@ class MoEDecoder(nn.Module):
             router_force_fp32=getattr(config, "router_fp32", True),
             expert_dropout=getattr(config, "expert_dropout", 0.1),
             expert_init_offset_scale=getattr(config, "expert_init_offset_scale", 1e-3),
+            expert_use_group_norm=getattr(config, "expert_use_group_norm", False),
         )
 
     def forward(self, image_with_wm):

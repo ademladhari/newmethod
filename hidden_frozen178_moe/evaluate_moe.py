@@ -3,6 +3,7 @@ import os
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 import utils
 from model.hidden import Hidden
@@ -29,6 +30,7 @@ def _load_model_from_run_folder(run_folder: str, device: torch.device, is_moe: b
 
     if is_moe:
         model.load_from_checkpoint(checkpoint)
+        model.set_epoch(checkpoint["epoch"])
     else:
         utils.model_from_checkpoint(model, checkpoint)
     model.encoder_decoder.eval()
@@ -131,8 +133,8 @@ def evaluate_attack(attack_layers, baseline_model, moe_model, data_loader, messa
 
             decoded_baseline = baseline_model.encoder_decoder.decoder(noised_baseline)
             decoded_moe, router_probs, topk_indices, router_logits = moe_model.encoder_decoder.decoder(noised_moe)
-            topk_weights = torch.gather(router_probs, dim=1, index=topk_indices)
-            topk_weights = topk_weights / (topk_weights.sum(dim=1, keepdim=True) + 1e-8)
+            selected_logits = torch.gather(router_logits, dim=1, index=topk_indices)
+            topk_weights = F.softmax(selected_logits, dim=1)
 
             baseline_acc.append(_bit_accuracy(decoded_baseline, message, use_sigmoid=False))
             moe_acc.append(_bit_accuracy(decoded_moe, message, use_sigmoid=True))
