@@ -52,7 +52,7 @@ class Router(nn.Module):
     def forward(self, features_flat: torch.Tensor):
         if self.force_fp32 and torch.is_autocast_enabled():
             with torch.autocast(device_type=features_flat.device.type, enabled=False):
-                dropped_features = self.input_dropout(features_flat.float())
+        dropped_features = self.input_dropout(features_flat.float()) if self.training else features_flat.float()
                 logits = self.mlp(dropped_features).float()
                 if self.training and self.jitter_noise > 0:
                     logits = logits + torch.randn_like(logits) * self.jitter_noise
@@ -60,7 +60,7 @@ class Router(nn.Module):
                 full_probs = F.softmax(scaled_logits, dim=1)
                 return self._select_topk(scaled_logits, full_probs, self.top_k)
 
-        dropped_features = self.input_dropout(features_flat)
+        dropped_features = self.input_dropout(features_flat) if self.training else features_flat
         logits = self.mlp(dropped_features).float()
         if self.training and self.jitter_noise > 0:
             logits = logits + torch.randn_like(logits) * self.jitter_noise

@@ -140,7 +140,7 @@ def load_options(options_file_name) -> (TrainingOptions, HiDDenConfiguration, di
     return train_options, hidden_config, noise_config
 
 
-def get_data_loaders(hidden_config: HiDDenConfiguration, train_options: TrainingOptions):
+def get_data_loaders(hidden_config: HiDDenConfiguration, train_options: TrainingOptions, num_workers: int = 0):
     """ Get torch data loaders for training and validation. The data loaders take a crop of the image,
     transform it into tensor, and normalize it."""
     data_transforms = {
@@ -157,12 +157,22 @@ def get_data_loaders(hidden_config: HiDDenConfiguration, train_options: Training
     }
 
     train_images = FlatImageFolder(train_options.train_folder, data_transforms['train'])
-    train_loader = torch.utils.data.DataLoader(train_images, batch_size=train_options.batch_size, shuffle=True,
-                                               num_workers=4)
+    train_loader = torch.utils.data.DataLoader(
+        train_images,
+        batch_size=train_options.batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        persistent_workers=num_workers > 0,
+    )
 
     validation_images = FlatImageFolder(train_options.validation_folder, data_transforms['test'])
-    validation_loader = torch.utils.data.DataLoader(validation_images, batch_size=train_options.batch_size,
-                                                    shuffle=False, num_workers=4)
+    validation_loader = torch.utils.data.DataLoader(
+        validation_images,
+        batch_size=train_options.batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        persistent_workers=num_workers > 0,
+    )
 
     return train_loader, validation_loader
 

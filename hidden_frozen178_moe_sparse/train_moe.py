@@ -17,10 +17,7 @@ from options_moe import HiDDenMoEConfiguration, TrainingOptions
 
 
 def get_data_loaders(hidden_config, train_options, num_workers=0):
-    train_loader, val_loader = utils.get_data_loaders(hidden_config, train_options)
-    train_loader.num_workers = num_workers
-    val_loader.num_workers = num_workers
-    return train_loader, val_loader
+    return utils.get_data_loaders(hidden_config, train_options, num_workers=num_workers)
 
 
 def log_progress_and_flush(losses_accu):
@@ -35,7 +32,7 @@ def train(
     train_options: TrainingOptions,
     this_run_folder: str,
     tb_logger,
-    print_each: int = 3,
+    print_each: int = 200,
     num_workers: int = 0,
     save_every: int = 1,
 ):
@@ -222,9 +219,9 @@ def main():
     new_run_parser.add_argument("--enable-fp16", dest="enable_fp16", action="store_true", help="Enable mixed precision.")
     new_run_parser.add_argument(
         "--print-each",
-        default=3,
+        default=200,
         type=int,
-        help="Log training progress every N steps (default: 3).",
+        help="Log training progress every N steps (default: 200).",
     )
     new_run_parser.add_argument(
         "--num-workers",
@@ -269,9 +266,9 @@ def main():
     continue_parser.add_argument("--epochs", "-e", required=False, type=int, help="Optional epoch override.")
     continue_parser.add_argument(
         "--print-each",
-        default=3,
+        default=200,
         type=int,
-        help="Log training progress every N steps (default: 3).",
+        help="Log training progress every N steps (default: 200).",
     )
     continue_parser.add_argument(
         "--num-workers",

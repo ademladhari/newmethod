@@ -1,0 +1,9 @@
+﻿# Dataset (COCO extracts, train/val images)
+data/
+
+# Python venv
+venv/
+
+# Kaggle download cache
+kagglehub_cache/
+

@@ -28,6 +28,46 @@ def log_progress_and_flush(losses_accu):
     sys.stdout.flush()
 
 
+def measure_val_routing_repeatability(model, val_data, device, hidden_config, max_images=100):
+    """Fraction of val samples whose top-k experts match across two consecutive eval forwards."""
+    encoder_decoder = model._encoder_decoder_module()
+    encoder_decoder.eval()
+    seen = 0
+    matches = 0
+    total = 0
+    with torch.no_grad():
+        for image, _ in val_data:
+            if seen >= max_images:
+                break
+            image = image.to(device)
+            batch_size = min(image.shape[0], max_images - seen)
+            image = image[:batch_size]
+            message = torch.Tensor(
+                np.random.choice([0, 1], (batch_size, hidden_config.message_length))
+            ).to(device)
+
+            def route_once():
+                encoded = encoder_decoder.encoder(image, message)
+                noised = encoder_decoder.noiser([encoded, image], apply_attack=False)[0]
+                _, _, topk_indices, _ = encoder_decoder.decoder(noised)
+                return topk_indices
+
+            topk_a = route_once()
+            topk_b = route_once()
+            for row in range(batch_size):
+                if torch.equal(topk_a[row].sort().values, topk_b[row].sort().values):
+                    matches += 1
+                total += 1
+            seen += batch_size
+    return matches / max(total, 1)
+
+
+def _train_val_load_l1(training_losses, validation_losses, num_experts):
+    train_load = [training_losses["expert_load_{} ".format(i)].avg for i in range(num_experts)]
+    val_load = [validation_losses["expert_load_{} ".format(i)].avg for i in range(num_experts)]
+    return float(sum(abs(t - v) for t, v in zip(train_load, val_load)))
+
+
 def run_validation_pass(model, val_data, device, hidden_config, this_run_folder, epoch, number_of_epochs, apply_training_noise, images_to_save, saved_images_size):
     validation_losses = defaultdict(AverageMeter)
     val_batches = 0
@@ -73,7 +113,7 @@ def train(
     train_options: TrainingOptions,
     this_run_folder: str,
     tb_logger,
-    print_each: int = 3,
+    print_each: int = 200,
     num_workers: int = 0,
     save_every: int = 1,
 ):
@@ -155,6 +195,22 @@ def train(
             saved_images_size=saved_images_size,
         )
         if val_batches > 0:
+            num_experts = hidden_config.num_experts
+            routing_repeat_match = measure_val_routing_repeatability(
+                model, val_data, device, hidden_config, max_images=100
+            )
+            train_val_load_l1 = _train_val_load_l1(training_losses, validation_losses, num_experts)
+            repeat_meter = AverageMeter()
+            repeat_meter.update(routing_repeat_match)
+            validation_losses["routing_repeat_match"] = repeat_meter
+            load_l1_meter = AverageMeter()
+            load_l1_meter.update(train_val_load_l1)
+            validation_losses["train_val_load_l1"] = load_l1_meter
+            logging.info(
+                "Routing diagnostics | repeat_match={:.4f} train_val_load_l1={:.4f}".format(
+                    routing_repeat_match, train_val_load_l1
+                )
+            )
             utils.write_losses(
                 os.path.join(this_run_folder, "validation.csv"),
                 validation_losses,
@@ -243,6 +299,12 @@ def main():
         help="Clip norm threshold for router gradients (0 disables).",
     )
     new_run_parser.add_argument(
+        "--adversarial-loss",
+        default=1e-3,
+        type=float,
+        help="Weight on encoder adversarial loss (use 0 to disable).",
+    )
+    new_run_parser.add_argument(
         "--load-penalty-weight",
         default=0.0,
         type=float,
@@ -277,9 +339,9 @@ def main():
     new_run_parser.add_argument("--enable-fp16", dest="enable_fp16", action="store_true", help="Enable mixed precision.")
     new_run_parser.add_argument(
         "--print-each",
-        default=3,
+        default=200,
         type=int,
-        help="Log training progress every N steps (default: 3).",
+        help="Log training progress every N steps (default: 200).",
     )
     new_run_parser.add_argument(
         "--num-workers",
@@ -324,9 +386,9 @@ def main():
     continue_parser.add_argument("--epochs", "-e", required=False, type=int, help="Optional epoch override.")
     continue_parser.add_argument(
         "--print-each",
-        default=3,
+        default=200,
         type=int,
-        help="Log training progress every N steps (default: 3).",
+        help="Log training progress every N steps (default: 200).",
     )
     continue_parser.add_argument(
         "--num-workers",
@@ -445,6 +507,7 @@ def main():
             decoder_loss=1.0,
             encoder_loss=0.7,
             adversarial_loss=1e-3,
+            adversarial_loss=args.adversarial_loss,
             enable_fp16=args.enable_fp16,
             num_experts=args.num_experts,
             top_k=args.top_k,
@@ -490,6 +553,11 @@ def main():
         tb_logger = TensorBoardLogger(os.path.join(this_run_folder, "tb-logs"))
     else:
         tb_logger = None
+
+    if args.command == "new" and args.adversarial_loss == 0.0:
+        args.freeze_discriminator = True
+        hidden_config.freeze_discriminator = True
+        logging.info("adversarial_loss=0: freezing discriminator for routing isolation.")
 
     model = HiddenMoE(hidden_config, device, tb_logger)
     if args.command == "new" and hidden_config.init_hidden_checkpoint:
