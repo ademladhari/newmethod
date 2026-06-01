@@ -3,12 +3,28 @@ from torch.utils.data import Dataset
 from PIL import Image
 import os
 
+_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+
+
 class FlatImageFolder(Dataset):
+    """All images under `root`, including nested class folders (e.g. ImageNet)."""
+
     def __init__(self, root, transform=None):
         self.root = root
-        # Only load actual files to avoid directory reading errors
-        self.paths = [os.path.join(root, f) for f in os.listdir(root) if os.path.isfile(os.path.join(root, f))]
+        self.paths = self._collect_image_paths(root)
+        if not self.paths:
+            raise RuntimeError("No images found under {}".format(root))
         self.transform = transform
+
+    @staticmethod
+    def _collect_image_paths(root):
+        paths = []
+        for dirpath, _, filenames in os.walk(root):
+            for name in filenames:
+                if os.path.splitext(name)[1].lower() in _IMAGE_EXTENSIONS:
+                    paths.append(os.path.join(dirpath, name))
+        paths.sort()
+        return paths
 
     def __getitem__(self, index):
         img = Image.open(self.paths[index]).convert('RGB')

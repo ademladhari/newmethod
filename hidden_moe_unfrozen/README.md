@@ -33,7 +33,7 @@ Runs are written under `./runs/` inside this folder (separate from `hidden_froze
 !python -u train_moe.py new \
   --data-dir /kaggle/working/coco100k \
   --name moe_unfrozen_sym_t14_v1 \
-  --batch-size 64 \
+  --batch-size 128 \
   --epochs 20 \
   --num-experts 4 \
   --top-k 1 \
@@ -59,7 +59,7 @@ Runs are written under `./runs/` inside this folder (separate from `hidden_froze
 
 **Do not pass** `--freeze-hidden-backbone` for the unfrozen experiment.
 
-Use a **smaller batch** (32–64) if OOM — unfrozen uses much more VRAM than frozen MoE-only.
+**Default batch size: 128** (matches best coco100k run). Use 64 or 32 only if OOM — unfrozen uses more VRAM than frozen MoE-only.
 
 ## Epoch 10 gates (same as symmetric frozen runs)
 
