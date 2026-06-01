@@ -16,11 +16,20 @@ from model.hidden_moe import HiddenMoE
 from options_moe import HiDDenMoEConfiguration, TrainingOptions
 
 
-def get_data_loaders(hidden_config, train_options, num_workers=0):
-    train_loader, val_loader = utils.get_data_loaders(hidden_config, train_options)
-    train_loader.num_workers = num_workers
-    val_loader.num_workers = num_workers
-    return train_loader, val_loader
+def get_data_loaders(
+    hidden_config,
+    train_options,
+    num_workers=0,
+    pin_memory=False,
+    prefetch_factor=None,
+):
+    return utils.get_data_loaders(
+        hidden_config,
+        train_options,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        prefetch_factor=prefetch_factor,
+    )
 
 
 def log_progress_and_flush(losses_accu):
@@ -76,7 +85,7 @@ def run_validation_pass(model, val_data, device, hidden_config, this_run_folder,
     logging.info("Running {} validation for epoch {}/{}".format(mode_label, epoch, number_of_epochs))
     for image, _ in val_data:
         val_batches += 1
-        image = image.to(device)
+        image = image.to(device, non_blocking=(device.type == "cuda"))
         message = torch.Tensor(np.random.choice([0, 1], (image.shape[0], hidden_config.message_length))).to(device)
         losses, (encoded_images, noised_images, decoded_messages, router_probs, topk_indices, router_logits) = model.validate_on_batch(
             [image, message],
@@ -115,9 +124,17 @@ def train(
     tb_logger,
     print_each: int = 200,
     num_workers: int = 0,
+    pin_memory: bool = False,
+    prefetch_factor=None,
     save_every: int = 1,
 ):
-    train_data, val_data = get_data_loaders(hidden_config, train_options, num_workers=num_workers)
+    train_data, val_data = get_data_loaders(
+        hidden_config,
+        train_options,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        prefetch_factor=prefetch_factor,
+    )
     file_count = len(train_data.dataset)
     if file_count % train_options.batch_size == 0:
         steps_in_epoch = file_count // train_options.batch_size
@@ -143,8 +160,14 @@ def train(
 
         logging.info("\nStarting epoch {}/{}".format(epoch, train_options.number_of_epochs))
         logging.info(
-            "Batch size = {} | Steps in epoch = {} | Log every {} steps | GPUs = {}".format(
-                train_options.batch_size, steps_in_epoch, print_each, max(gpu_count, 1)
+            "Batch size = {} | Steps in epoch = {} | Log every {} steps | GPUs = {} | workers = {} | pin_memory = {} | prefetch = {}".format(
+                train_options.batch_size,
+                steps_in_epoch,
+                print_each,
+                max(gpu_count, 1),
+                num_workers,
+                pin_memory,
+                prefetch_factor if num_workers > 0 else "n/a",
             )
         )
         sys.stdout.flush()
@@ -153,7 +176,7 @@ def train(
         step = 1
 
         for image, _ in train_data:
-            image = image.to(device)
+            image = image.to(device, non_blocking=(device.type == "cuda"))
             message = torch.Tensor(np.random.choice([0, 1], (image.shape[0], hidden_config.message_length))).to(device)
             losses, _ = model.train_on_batch([image, message])
 
@@ -347,7 +370,19 @@ def main():
         "--num-workers",
         default=0,
         type=int,
-        help="DataLoader workers (use 0 on Kaggle notebooks).",
+        help="DataLoader worker processes (0=main process only; 6 is a good Kaggle default).",
+    )
+    new_run_parser.add_argument(
+        "--pin-memory",
+        dest="pin_memory",
+        action="store_true",
+        help="Use pinned host memory for faster CPU→GPU transfers (CUDA only).",
+    )
+    new_run_parser.add_argument(
+        "--prefetch-factor",
+        default=3,
+        type=int,
+        help="Batches prefetched per worker when num-workers > 0 (default: 3).",
     )
     new_run_parser.add_argument(
         "--no-multi-gpu",
@@ -394,7 +429,19 @@ def main():
         "--num-workers",
         default=0,
         type=int,
-        help="DataLoader workers (use 0 on Kaggle notebooks).",
+        help="DataLoader worker processes (0=main process only; 6 is a good Kaggle default).",
+    )
+    continue_parser.add_argument(
+        "--pin-memory",
+        dest="pin_memory",
+        action="store_true",
+        help="Use pinned host memory for faster CPU→GPU transfers (CUDA only).",
+    )
+    continue_parser.add_argument(
+        "--prefetch-factor",
+        default=3,
+        type=int,
+        help="Batches prefetched per worker when num-workers > 0 (default: 3).",
     )
     continue_parser.add_argument(
         "--no-multi-gpu",
@@ -432,6 +479,8 @@ def main():
     args = parser.parse_args()
     print_each = args.print_each
     num_workers = args.num_workers
+    pin_memory = getattr(args, "pin_memory", False)
+    prefetch_factor = getattr(args, "prefetch_factor", 3)
     save_every = max(1, args.save_every)
     use_multi_gpu = not args.no_multi_gpu
     checkpoint = None
@@ -594,6 +643,8 @@ def main():
         tb_logger,
         print_each=print_each,
         num_workers=num_workers,
+        pin_memory=pin_memory,
+        prefetch_factor=prefetch_factor,
         save_every=save_every,
     )
 

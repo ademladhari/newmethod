@@ -140,9 +140,14 @@ def load_options(options_file_name) -> (TrainingOptions, HiDDenConfiguration, di
     return train_options, hidden_config, noise_config
 
 
-def get_data_loaders(hidden_config: HiDDenConfiguration, train_options: TrainingOptions):
-    """ Get torch data loaders for training and validation. The data loaders take a crop of the image,
-    transform it into tensor, and normalize it."""
+def get_data_loaders(
+    hidden_config: HiDDenConfiguration,
+    train_options: TrainingOptions,
+    num_workers: int = 4,
+    pin_memory: bool = False,
+    prefetch_factor: int = None,
+):
+    """Get train/val loaders. prefetch_factor is only used when num_workers > 0."""
     data_transforms = {
         'train': transforms.Compose([
             transforms.RandomCrop((hidden_config.H, hidden_config.W), pad_if_needed=True),
@@ -156,13 +161,21 @@ def get_data_loaders(hidden_config: HiDDenConfiguration, train_options: Training
         ])
     }
 
+    use_pin_memory = bool(pin_memory and torch.cuda.is_available())
+    loader_kwargs = {
+        "batch_size": train_options.batch_size,
+        "num_workers": num_workers,
+        "pin_memory": use_pin_memory,
+    }
+    if num_workers > 0:
+        loader_kwargs["prefetch_factor"] = 2 if prefetch_factor is None else prefetch_factor
+        loader_kwargs["persistent_workers"] = True
+
     train_images = FlatImageFolder(train_options.train_folder, data_transforms['train'])
-    train_loader = torch.utils.data.DataLoader(train_images, batch_size=train_options.batch_size, shuffle=True,
-                                               num_workers=4)
+    train_loader = torch.utils.data.DataLoader(train_images, shuffle=True, **loader_kwargs)
 
     validation_images = FlatImageFolder(train_options.validation_folder, data_transforms['test'])
-    validation_loader = torch.utils.data.DataLoader(validation_images, batch_size=train_options.batch_size,
-                                                    shuffle=False, num_workers=4)
+    validation_loader = torch.utils.data.DataLoader(validation_images, shuffle=False, **loader_kwargs)
 
     return train_loader, validation_loader
 
