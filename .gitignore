@@ -1,6 +1,9 @@
 ﻿# Dataset (COCO extracts, train/val images)
 data/
 
+# Training runs, checkpoints, CSVs, plots
+results/
+
 # Python venv
 venv/
 

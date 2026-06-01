@@ -506,7 +506,6 @@ def main():
             discriminator_channels=64,
             decoder_loss=1.0,
             encoder_loss=0.7,
-            adversarial_loss=1e-3,
             adversarial_loss=args.adversarial_loss,
             enable_fp16=args.enable_fp16,
             num_experts=args.num_experts,
