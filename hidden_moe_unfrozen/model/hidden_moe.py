@@ -348,8 +348,9 @@ class HiddenMoE:
             noiser.pick_batch_expert()
             try:
                 with self._autocast_context():
+                    use_attack_noise = bool(getattr(self.config, "apply_training_noise", False))
                     encoded_images, noised_images, decoded_messages, router_probs, topk_indices, router_logits = self.encoder_decoder(
-                        images, messages, apply_training_noise=False
+                        images, messages, apply_training_noise=use_attack_noise
                     )
             finally:
                 noiser.clear_batch_expert()

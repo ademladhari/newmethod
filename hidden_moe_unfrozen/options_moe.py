@@ -41,6 +41,7 @@ class HiDDenMoEConfiguration(HiDDenConfiguration):
         init_hidden_checkpoint: str = "",
         freeze_hidden_backbone: bool = False,
         freeze_discriminator: bool = False,
+        apply_training_noise: bool = False,
     ):
         super(HiDDenMoEConfiguration, self).__init__(
             H=H,
@@ -80,4 +81,5 @@ class HiDDenMoEConfiguration(HiDDenConfiguration):
         self.init_hidden_checkpoint = init_hidden_checkpoint
         self.freeze_hidden_backbone = freeze_hidden_backbone
         self.freeze_discriminator = freeze_discriminator
+        self.apply_training_noise = apply_training_noise
 

@@ -413,6 +413,11 @@ def main():
         action="store_true",
         help="Freeze discriminator weights.",
     )
+    new_run_parser.add_argument(
+        "--apply-training-noise",
+        action="store_true",
+        help="Apply MoE distortion experts during training forward (schedule in MoENoiseLayer.set_training_schedule).",
+    )
     new_run_parser.set_defaults(tensorboard=False)
     new_run_parser.set_defaults(enable_fp16=False)
     new_run_parser.set_defaults(router_fp32=True)
@@ -477,6 +482,13 @@ def main():
         type=str,
         help="Optional override for router_fp32 from stored config.",
     )
+    continue_parser.add_argument(
+        "--apply-training-noise",
+        default=None,
+        choices=["true", "false"],
+        type=str,
+        help="Override apply_training_noise from stored config.",
+    )
 
     args = parser.parse_args()
     print_each = args.print_each
@@ -511,6 +523,7 @@ def main():
             ("init_hidden_checkpoint", ""),
             ("freeze_hidden_backbone", False),
             ("freeze_discriminator", False),
+            ("apply_training_noise", False),
         ):
             if not hasattr(hidden_config, key):
                 setattr(hidden_config, key, default_value)
@@ -520,6 +533,8 @@ def main():
             hidden_config.freeze_discriminator = args.freeze_discriminator.lower() == "true"
         if args.router_fp32 is not None:
             hidden_config.router_fp32 = args.router_fp32.lower() == "true"
+        if args.apply_training_noise is not None:
+            hidden_config.apply_training_noise = args.apply_training_noise.lower() == "true"
         checkpoint, loaded_checkpoint_file_name = utils.load_last_checkpoint(os.path.join(this_run_folder, "checkpoints"))
         train_options.start_epoch = checkpoint["epoch"] + 1
         if args.data_dir is not None:
@@ -580,6 +595,7 @@ def main():
             init_hidden_checkpoint=args.init_hidden_checkpoint,
             freeze_hidden_backbone=args.freeze_hidden_backbone,
             freeze_discriminator=args.freeze_discriminator,
+            apply_training_noise=args.apply_training_noise,
         )
         this_run_folder = utils.create_folder_for_run(train_options.runs_folder, args.name)
         with open(os.path.join(this_run_folder, "options-and-config.pickle"), "wb+") as f:
@@ -636,6 +652,13 @@ def main():
         model.load_from_checkpoint(checkpoint)
 
     logging.info("Branch: hidden_moe_unfrozen (warm-start checkpoint, backbone trainable by default).")
+    if getattr(hidden_config, "apply_training_noise", False):
+        logging.info(
+            "Training forward: apply_training_noise=True (MoE attack schedule active per epoch; "
+            "epochs 1-20 are identity-only in set_training_schedule, then ramp to epoch 80)."
+        )
+    else:
+        logging.info("Training forward: apply_training_noise=False (identity only during training).")
     logging.info("HiDDeN MoE model: {}\n".format(model.to_stirng()))
     logging.info("Model Configuration:\n")
     logging.info(pprint.pformat(vars(hidden_config)))
