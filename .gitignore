@@ -6,6 +6,7 @@ results/
 
 # Python venv
 venv/
+.venv/
 
 # Kaggle download cache
 kagglehub_cache/

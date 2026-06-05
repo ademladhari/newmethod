@@ -223,15 +223,23 @@ class HiddenMoE:
             preview = skipped_keys[:8]
             logging.info("Warm-start skipped key preview: {}".format(preview))
 
-    def load_from_checkpoint(self, checkpoint):
+    def load_from_checkpoint(self, checkpoint, load_optimizers: bool = True):
         enc_dec_state = self._normalize_state_dict(checkpoint["enc-dec-model"])
         discrim_state = self._normalize_state_dict(checkpoint["discrim-model"])
-        self._encoder_decoder_module().load_state_dict(enc_dec_state)
-        self._discriminator_module().load_state_dict(discrim_state)
+        self._encoder_decoder_module().load_state_dict(enc_dec_state, strict=False)
+        self._discriminator_module().load_state_dict(discrim_state, strict=False)
+        if not load_optimizers:
+            return
         if self.optimizer_enc_dec is not None and checkpoint.get("enc-dec-optim") is not None:
-            self.optimizer_enc_dec.load_state_dict(checkpoint["enc-dec-optim"])
+            try:
+                self.optimizer_enc_dec.load_state_dict(checkpoint["enc-dec-optim"])
+            except ValueError as exc:
+                logging.warning("Skipping enc-dec optimizer state (inference / param-group mismatch): %s", exc)
         if self.optimizer_discrim is not None and checkpoint.get("discrim-optim") is not None:
-            self.optimizer_discrim.load_state_dict(checkpoint["discrim-optim"])
+            try:
+                self.optimizer_discrim.load_state_dict(checkpoint["discrim-optim"])
+            except ValueError as exc:
+                logging.warning("Skipping discrim optimizer state (inference / param-group mismatch): %s", exc)
 
     def save_checkpoint(self, experiment_name: str, epoch: int, checkpoint_folder: str):
         if not os.path.exists(checkpoint_folder):
@@ -251,13 +259,23 @@ class HiddenMoE:
 
     def set_epoch(self, epoch: int):
         encoder_decoder = self._encoder_decoder_module()
-        encoder_decoder.noiser.set_training_schedule(epoch)
+        noiser = encoder_decoder.noiser
+        if hasattr(noiser, "set_schedule_bounds"):
+            noiser.set_schedule_bounds(
+                getattr(self.config, "attack_schedule_identity_epochs", 20),
+                getattr(self.config, "attack_schedule_end_epoch", 80),
+            )
+        noiser.set_training_schedule(epoch)
         progress = max(0.0, min(1.0, float(epoch - 1) / float(self.balance_loss_warmup_epochs)))
         self.current_balance_loss_weight = self.balance_loss_start_weight + (
             self.config.balance_loss_weight - self.balance_loss_start_weight
         ) * progress
 
-        total_epochs = max(float(getattr(self.config, "number_of_epochs", 200)), 1.0)
+        # Use schedule_total_epochs (fixed at `new`), not number_of_epochs (may grow on `continue`).
+        schedule_epochs = getattr(self.config, "schedule_total_epochs", None)
+        if schedule_epochs is None:
+            schedule_epochs = getattr(self.config, "number_of_epochs", 200)
+        total_epochs = max(float(schedule_epochs), 1.0)
         progress = max(0.0, min(1.0, float(epoch - 1) / total_epochs))
         current_temperature = self.router_temperature_start + (
             self.router_temperature_end - self.router_temperature_start

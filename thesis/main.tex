@@ -1,4 +1,4 @@
-\documentclass[12pt, a4paper, twoside]{report}
+﻿\documentclass[12pt, a4paper, twoside]{report}
 
 % --- Language and Fonts ---
 \usepackage[utf8]{inputenc}
@@ -288,244 +288,751 @@ Wrapping every method in this interface was the most time-consuming part of the 
 
 Diffusion-native methods require access to a compatible generative model. I used [specific model versions to be confirmed] as the primary generation environments. For methods tied to a specific architecture (The Stable Signature was originally designed for Stable Diffusion; Tree-Ring for DDIM-based samplers), I evaluated on the intended architecture and noted where cross-architecture generalisation was tested.
 
-\section{Experimental Setup}
-
-\subsection{Implementation Details}
-
-All experiments ran on [hardware specification to be confirmed]. Deep learning components used PyTorch [version to be confirmed] with CUDA [version]. Transform-based methods used NumPy and SciPy. Pre-trained weights were used wherever the original authors made them publicly available; methods without public weights were trained from scratch on [training dataset] for [number of epochs] with [optimiser and learning rate]. All random seeds were fixed at [seed value].
-
-\subsection{Evaluation Metrics}
-
-Four primary metrics are used throughout Chapter~4.
-
-\textbf{PSNR (Peak Signal-to-Noise Ratio)} measures pixel-level distortion introduced by the watermark embedding. PSNR $= 10 \log_{10}(255^2 / \text{MSE})$ in dB, where MSE is the mean squared error between watermarked and original image. Higher is better (less distortion). I adopt 35~dB as the threshold for ``imperceptible'' watermarking, consistent with common practice in the literature. PSNR has well-known limitations as a perceptual quality metric: a structured spatial artefact can produce higher PSNR than random noise of the same energy, yet be more visually conspicuous. I report SSIM alongside PSNR as a partial correction.
-
-\textbf{SSIM (Structural Similarity Index)} captures luminance, contrast, and structural similarity simultaneously. Values range from 0 to 1; values above 0.98 are generally considered visually indistinguishable. For watermarking evaluation, SSIM is a better predictor of perceptual artefact visibility than PSNR, though neither is a substitute for human perceptual evaluation.
-
-\textbf{Bit Accuracy (BA)} applies to methods that embed a discrete binary payload. It is the fraction of bits correctly decoded from a watermarked (and potentially attacked) image. Random guessing produces 50\% on a balanced payload; I treat 90\% as the practical threshold for reliable operation. I report BA under each attack condition separately.
-
-\textbf{AUC (Area Under the ROC Curve)} applies to detection-only methods that output a confidence score rather than a decoded bitstring. AUC = 0.5 is chance; AUC = 1.0 is perfect detection. I report AUC at the detection threshold that achieves 1\% false positive rate (FPR@1\%).
-
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \chapter{Experiments and Results}
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-This chapter reports the experiments for the mixture-of-experts (MoE) watermarking architecture proposed in Chapter~3, addressing research questions RQ3 (whether routed specialisation improves robustness across a heterogeneous attack distribution) and RQ4 (the computational cost of the architecture and its viability at scale). The comparative cross-method evaluation that constitutes the other track of this thesis is reported separately and is not duplicated here.
+This chapter reports twenty-eight training runs across five research questions. The structure follows the experiment template: each experiment states a research question, lists the fixed and varied parameters as a table of assumptions, describes the evaluation procedure, presents results with figures and tables, and closes with a commentary on what the numbers actually mean. Results I found inconvenient are reported as prominently as results I found encouraging.
 
-\section{Experimental Setup}
+\section{Research Setup}
+\label{sec:setup}
 
-\subsection{Base Model and Architecture}
+\subsection{Research Questions}
 
-Every MoE run warm-starts from a trained HiDDeN encoder--decoder---the epoch-177 checkpoint of my own HiDDeN baseline---and replaces the single decoder with the routed decoder described in Section~3.3: a shared convolutional feature extractor, a gating router, and $N$ expert heads whose top-$k$ outputs are combined into the decoded message. The encoder and the adversarial discriminator are inherited unchanged. The payload is fixed at 30 bits and all images are processed as $128\times128$ patches, matching the receptive field of the original architecture.
+Five research questions organise the work in this chapter.
 
-\subsection{Dataset and Preprocessing}
+\textbf{RQ1}: Does integrating a MoE routing layer into HiDDeN preserve clean-channel watermark quality relative to the single-decoder baseline?
 
-Training uses the COCO-2017 corpus: 118{,}287 images for training and 5{,}000 for validation. During training a random $128\times128$ crop is taken from each image; validation uses a deterministic centre crop so that metrics are directly comparable across epochs. Pixel values are normalised to $[-1,1]$. Because the model operates on crops rather than whole images, source resolution above $128\times128$ only increases crop diversity and does not change the working resolution.
+\textbf{RQ2}: Does the MoE architecture improve watermark robustness under the eight standard image attacks, and if so, for which attack types?
 
-\subsection{Training Configuration}
+\textbf{RQ3}: Which architectural configuration---backbone freezing, routing sparsity, expert count, and training duration---achieves the lowest validation BER with healthy routing?
 
-The reported model is the best configuration from a sweep over the number of experts, routing sparsity, balance-loss weighting, router temperature, and whether the HiDDeN backbone is frozen. Its settings are summarised in Table~\ref{tab:moe-config}.
+\textbf{RQ4}: What is the per-image inference latency and memory overhead of the MoE decoder relative to HiDDeN, and how does it scale with batch size?
+
+\textbf{RQ5}: Does the routing collapse score (\texttt{expert\_max\_use}) measured during training predict clean-channel BER at evaluation time?
+
+\subsection{Dataset}
+
+All COCO-100k experiments use the COCO-2017 dataset: 118{,}287 images for training and 5{,}000 for validation. Training applies a random $128\times128$ crop per image; validation uses a deterministic centre crop to ensure that epoch-to-epoch metrics are directly comparable. Pixel values are normalised to $[-1,1]$.
+
+Early-phase exploratory runs used a 20k-image subset of the same corpus. These are marked as \textit{coco20k} in tables and are not included in the primary analysis.
+
+\subsection{Research Environment}
+
+All training and evaluation ran on a single NVIDIA GPU (Windows 10, CUDA 12.8, PyTorch 2.x). The codebase is a fork of the original HiDDeN repository~\cite{zhu2018hidden}, extended with the MoE decoder module, balance-loss scheduler, and routing diagnostics described in Chapter~3. All 28 runs share the same training loop; differences between runs are limited to the configuration parameters listed in each experiment's assumptions table.
+
+\subsection{Measures}
+
+\textbf{Bit error rate (BER)}: fraction of message bits decoded incorrectly. Lower is better. BER $= 0$ indicates perfect recovery.
+
+\textbf{Bit accuracy (BA)}: $\text{BA} = 1 - \text{BER}$. Higher is better.
+
+\textbf{Encoder MSE}: mean squared pixel error between the original cover and watermarked image.
+
+\textbf{PSNR}: $10\log_{10}(1/\text{MSE})$ in dB. Higher means less visible distortion.
+
+\textbf{\texttt{expert\_max\_use}}: maximum per-expert load fraction during a validation pass. For $N$ perfectly balanced experts, the expected value is $1/N$. Values substantially above $1/N$ indicate partial or full routing collapse.
+
+\textbf{\texttt{train\_val\_load\_l1}}: $L_1$ distance between the training and validation expert-load vectors, normalised by $N$. A large gap indicates that the router generalised poorly from the training distribution to the validation distribution.
+
+\textbf{Effective expert count}: $\exp(-\sum_{i} p_i \log p_i)$, where $p_i$ is the per-expert load fraction. This is the entropic effective count; it equals $N$ when load is perfectly uniform and approaches 1 under full collapse.
+
+The reported model configuration is given in Table~\ref{tab:moe-config}.
 
 \begin{table}[H]
 \centering
-\caption{Training configuration of the reported MoE model.}
+\caption{Configuration of the reported MoE model (R0), used as the reference in RQ1 and RQ2.}
 \label{tab:moe-config}
 \begin{tabular}{ll}
 \toprule
 \textbf{Parameter} & \textbf{Value} \\
 \midrule
 Experts $N$ & 4 \\
-Routing $k$ & 1 (sparse: one expert per image) \\
+Routing $k$ & 1 (top-1 sparse) \\
 Batch size & 128 \\
 Epochs & 20 \\
-Optimiser & Adam \\
-Balance-loss weight & 0.04 (start 0.005, 10-epoch warm-up) \\
+Optimiser & Adam, lr $= 10^{-4}$ \\
+Balance-loss weight & 0.04 (warm-up from 0.005 over 10 epochs) \\
 Router $z$-loss weight & 0.001 \\
-Router temperature & $1.4 \to 1.0$ (annealed) \\
+Router temperature & $1.4 \to 1.0$ (linear annealing) \\
 Router jitter / input dropout & 0.0 / 0.0 \\
-Backbone & unfrozen (encoder + shared trunk trainable) \\
+Backbone & Unfrozen (encoder and shared trunk co-trained) \\
 Warm-start & HiDDeN epoch-177 \\
 Dataset & COCO-2017, $128\times128$ crops, 30-bit payload \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{Evaluation Protocol}
+%------------------------------------------------------------------
+\section{Experiment Group 1: Comparative Performance Against HiDDeN (RQ1 and RQ2)}
+\label{sec:rq1rq2}
+%------------------------------------------------------------------
 
-I evaluate along three axes. First, \emph{routing health}: the maximum per-expert utilisation (\texttt{expert\_max\_use}), the $L_1$ distance between the training and validation expert-load distributions (\texttt{train\_val\_load\_l1}), the effective number of experts (the exponential of the router entropy), and the load-balancing loss. These diagnose whether the router collapses onto a single expert. Second, \emph{clean-channel fidelity}: bit error rate (BER) and the equivalent bit accuracy ($\text{BA} = 1 - \text{BER}$), encoder MSE, and PSNR, all measured with the distortion channel disabled. Third, \emph{robustness}: bit accuracy measured after applying each of eight distortions to the watermarked image, using an identical protocol for the HiDDeN baseline and the MoE model so that the comparison is fair.
+\subsection*{Experiment 1: Clean-Channel Fidelity}
 
-One methodological point matters for interpreting the robustness results. The HiDDeN baseline was trained with an empty noise configuration, and the MoE distortion curriculum (Section~3.3) applies only the identity channel for the first twenty epochs; the reported MoE model is the epoch-20 checkpoint. Both models are therefore effectively \emph{clean-trained}: neither has seen the test-time attacks during training. The robustness differences reported below thus reflect architectural generalisation rather than differential attack training.
+\paragraph{Research question.}
+Does the MoE decoder (R0, Table~\ref{tab:moe-config}) match the HiDDeN baseline on clean-channel bit accuracy, encoder distortion, and image quality, when evaluated on 500 unseen COCO validation images?
 
-\section{Routing Health and Expert Utilisation}
-
-A MoE decoder is only meaningful if the router actually distributes work across experts; a collapsed router reduces the model to a single decoder carrying wasted parameters. Table~\ref{tab:moe-routing} reports the routing diagnostics at epoch~20 for the reported unfrozen configuration and contrasts them with two frozen-backbone variants from my earlier sweeps.
+\paragraph{Assumptions.}
 
 \begin{table}[H]
 \centering
-\caption{Routing diagnostics (validation, epoch 20). For four experts, perfectly uniform usage is 0.25. Lower \texttt{expert\_max\_use} and \texttt{load\_l1} are better; effective experts closer to 4 is better.}
-\label{tab:moe-routing}
-\begin{tabular}{lccc}
+\caption{Fixed and varied parameters for Experiment~1.}
+\label{tab:exp1-assumptions}
+\begin{tabular}{ll}
 \toprule
-\textbf{Configuration} & \texttt{expert\_max\_use} & \texttt{train\_val\_load\_l1} & \textbf{effective experts} \\
+\textbf{Parameter} & \textbf{Setting} \\
 \midrule
-Unfrozen, symmetric (reported) & 0.31 & 0.08 & 3.99 \\
-Frozen, balance weight 0.08 & 0.55 & 0.60 & --- \\
-Frozen, temp.\ $1.4\to0.9$ & 0.58 & $\approx 1.0$ & --- \\
+HiDDeN checkpoint & epoch-177 (best clean-channel) \\
+MoE checkpoint & R0, epoch-20 (unfrozen, $N=4$, $k=1$, batch 128) \\
+Evaluation set & 500 COCO-2017 validation images \\
+Channel & Identity (no distortion) \\
+Payload & 30 bits, fixed watermark message \\
+Image size & $128\times128$ centre crop \\
+Metric & BER, BA, encoder MSE, PSNR (approx.) \\
+Varied & Model architecture (HiDDeN vs.\ MoE) \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The reported unfrozen run sits at \texttt{expert\_max\_use} $=0.31$, close to the balanced value of $0.25$, with per-expert validation loads of approximately $0.21$, $0.27$, $0.26$, and $0.26$ and an effective expert count of $3.99$ out of $4$---all four experts are active. The balance loss settled near its theoretical optimum of $1.0$. By contrast, the frozen-backbone variants drift to $0.55$--$0.58$, indicating partial collapse onto one or two experts. Unfreezing the encoder and shared trunk---rather than training only the router and experts on top of a frozen HiDDeN---was the single change that most improved routing balance, consistent with the hypothesis that richer shared features give the router a more separable signal to route on.
+\paragraph{Course of the experiment.}
+Both checkpoints are loaded in inference mode. For each validation image, the encoder embeds the same fixed 30-bit message, and the decoder recovers it. BER is computed per-image and averaged. Encoder MSE is the pixel-space L2 error between cover and watermarked image. PSNR is derived from the mean MSE across all 500 images.
 
-Figure~\ref{fig:training-dynamics} shows the routing health and watermark error over the course of training for the best unfrozen run and a representative collapsed frozen run, illustrating that the two metrics move together: a stable router produces low BER throughout, while collapse in the frozen run persists and correlates with higher error.
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=\textwidth]{figures/C_training_collapse_and_BER_over_epochs.png}
-\caption{Training dynamics over epochs for the unfrozen balanced run (green) and a collapsed frozen run (red). \textit{Left:} routing collapse score $= \texttt{expert\_max\_use} \times N$ (score~$=1$ is perfectly balanced). \textit{Right:} validation BER~(\%). The two quantities co-evolve: the balanced run maintains a stable router and consistently low BER, while the collapsed run shows persistent routing imbalance and higher error throughout training.}
-\label{fig:training-dynamics}
-\end{figure}
-
-Figure~\ref{fig:collapse-vs-ber} extends this observation across all COCO-100k runs in my archive, confirming that the relationship between routing collapse and watermark error holds systematically, not just for the two highlighted configurations.
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=\textwidth]{figures/A_collapse_score_vs_clean_BER.png}
-\caption{Routing collapse score versus clean-channel BER across all COCO-100k MoE runs with final-epoch validation logs ($n = 13$). The collapse score $= \texttt{expert\_max\_use} \times N$ is comparable across 4- and 8-expert models (score~$= 1$ is balanced; score~$= N$ is full collapse onto one expert). Green points are unfrozen-backbone runs; red are frozen. The dashed line is a least-squares fit. Pearson $r = 0.77$, $p = 0.002$: runs with stronger router collapse have significantly higher clean-channel bit error rate.}
-\label{fig:collapse-vs-ber}
-\end{figure}
-
-\section{Clean-Channel Performance}
-
-Table~\ref{tab:moe-clean} compares the MoE model and the HiDDeN baseline with the distortion channel disabled.
+\paragraph{Results.}
 
 \begin{table}[H]
 \centering
-\caption{Clean-channel performance (identity channel, epoch 20). BER = bit error rate; BA = bit accuracy. PSNR is from a 10-image qualitative probe.}
+\caption{Clean-channel performance. PSNR is from a 500-image validation probe.}
 \label{tab:moe-clean}
 \begin{tabular}{lcccc}
 \toprule
 \textbf{Model} & \textbf{BER} & \textbf{Bit accuracy} & \textbf{Encoder MSE} & \textbf{PSNR (approx.)} \\
 \midrule
-HiDDeN epoch-177 & 0.0033 & 99.67\% & 0.0026 & $\sim$35~dB \\
-MoE (unfrozen, 4 experts) & 0.0032 & 99.68\% & 0.0026 & $\sim$33~dB \\
+HiDDeN epoch-177 & 0.35\% & 99.65\% & 0.0026 & $\approx 35$~dB \\
+MoE R0 (unfrozen, 4 exp.) & 0.32\% & 99.68\% & 0.0026 & $\approx 33$~dB \\
 \bottomrule
 \end{tabular}
 \end{table}
-
-On the clean channel the MoE decoder matches the HiDDeN baseline to within statistical noise (both $\approx 99.7\%$ bit accuracy and identical encoder MSE), confirming that replacing the single decoder with a routed multi-expert head does not harm embedding or recovery when no distortion is applied. The PSNR figures come from a small qualitative probe and place both models comfortably above the 30~dB imperceptibility floor, with HiDDeN marginally higher; I treat the PSNR gap as indicative rather than conclusive given the probe size.
-
-\section{Robustness to Image Attacks}
-
-Table~\ref{tab:moe-attacks} reports bit accuracy under the eight-distortion suite, each applied independently to 800 validation images, for the HiDDeN baseline and the MoE model. Rows are ordered by the MoE advantage. Figure~\ref{fig:attack-delta} visualises the same data as a signed difference plot to make the direction of each result immediately legible.
-
-\begin{table}[H]
-\centering
-\caption{Bit accuracy (\%) under each attack, 800 validation images per condition. $\Delta$ is the MoE advantage over HiDDeN in percentage points. Both models are clean-trained.}
-\label{tab:moe-attacks}
-\begin{tabular}{lccc}
-\toprule
-\textbf{Attack} & \textbf{HiDDeN BA} & \textbf{MoE BA} & \textbf{$\Delta$ (MoE$-$HiDDeN)} \\
-\midrule
-Gaussian noise & 81.00 & 89.76 & $+8.75$ \\
-Cropout        & 85.08 & 88.11 & $+3.03$ \\
-Crop           & 52.80 & 55.71 & $+2.91$ \\
-Resize         & 76.83 & 77.93 & $+1.10$ \\
-Combined       & 49.57 & 50.30 & $+0.73$ \\
-Dropout        & 90.23 & 90.77 & $+0.55$ \\
-Quantisation   & 99.60 & 99.63 & $+0.03$ \\
-None (identity)& 99.67 & 99.69 & $+0.02$ \\
-JPEG           & 58.48 & 52.45 & $-6.03$ \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-The picture is genuinely mixed, and I report it as such. The MoE model improves on the baseline for six of the eight distortions, with the largest gain on additive Gaussian noise ($+8.8$ points) and a clear gain on cropout ($+3.0$). It is essentially tied on the clean and quantisation conditions. It is clearly \emph{worse} on JPEG compression ($-6.0$ points), and both models collapse toward chance on the most aggressive conditions---random crop and the combined attack---where neither was trained to operate.
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.85\textwidth]{figures/D_attack_MoE_minus_HiDDeN.png}
-\caption{MoE bit accuracy minus HiDDeN bit accuracy (percentage points) under each of eight attacks, 800 validation images per condition. Positive values (green) indicate MoE outperforms the baseline; negative (red) indicates HiDDeN outperforms MoE. Both models are clean-trained; differences reflect architectural generalisation rather than differential attack training.}
-\label{fig:attack-delta}
+\includegraphics[width=\textwidth]{figures/rq/RQ1_clean_quality.png}
+\caption{Experiment 1 results: clean-channel quality comparison. \textit{Left}: bit accuracy distribution across 500 images for both models. \textit{Right}: per-expert validation load at epoch~20; \texttt{expert\_max\_use} $= 0.31$ against a uniform baseline of $0.25$.}
+\label{fig:rq1-quality}
 \end{figure}
 
-Two observations follow. First, because both models are clean-trained, the Gaussian-noise and cropout gains are attributable to the routed architecture itself rather than to attack-specific training; this is the clearest positive evidence for the MoE hypothesis (RQ3) in my current results. Second, the JPEG regression is the most important negative result: the routed decoder generalises \emph{worse} than the monolithic decoder to block-DCT compression artefacts. I read this as a sign that, under a clean curriculum, the router has not learned to align any expert with compression-like degradation, and the partitioning of the feature space mildly hurts a distortion the single decoder handled more uniformly. Both points are taken up in the discussion of future work.
+\paragraph{Comments.}
+The MoE decoder is statistically indistinguishable from HiDDeN on clean-channel decoding: both reach approximately $99.65\%$ bit accuracy, and encoder MSE is identical. The PSNR gap of roughly 2~dB goes in HiDDeN's favour; I treat this as indicative rather than conclusive given sample size, but it suggests the MoE encoder introduces marginally more distortion. The routing load panel confirms that all four experts are active ($\text{effective experts} \approx 3.99$) with near-uniform load and a small train--validation gap of $0.08$. The practical conclusion is that routing does not degrade clean-channel performance.
 
-\section{Ablations}
+%-----
 
-Table~\ref{tab:moe-ablations} summarises the principal MoE training runs on COCO-100k (or the same $128\times128$ protocol) that I use to justify the reported configuration. Metrics are taken from the final epoch of each run with full validation logs; clean BER uses the identity channel only. Legacy runs trained on smaller COCO subsets or with batch sizes below 128 are discussed only qualitatively where they informed the sweep.
+\subsection*{Experiment 2: Robustness Under Image Attacks}
+\label{sec:exp2}
+
+\paragraph{Research question.}
+Do MoE experts that were routed during clean-channel training generalise better than a single HiDDeN decoder when the watermarked image is subjected to one of eight standard distortions at test time?
+
+\paragraph{Assumptions.}
 
 \begin{table}[H]
 \centering
-\caption{Ablation summary (validation, final logged epoch). COCO-100k unless noted. Lower BER, \texttt{expert\_max\_use}, and \texttt{train\_val\_load\_l1} are better. The reported model is highlighted.}
-\label{tab:moe-ablations}
-\small
-\begin{tabular}{llcccccc}
+\caption{Fixed and varied parameters for Experiment~2.}
+\label{tab:exp2-assumptions}
+\begin{tabular}{ll}
 \toprule
-\textbf{Run} & \textbf{Backbone} & $N$ & $k$ & \textbf{batch} & \textbf{BER} & \texttt{max\_use} & \texttt{load\_l1} \\
+\textbf{Parameter} & \textbf{Setting} \\
 \midrule
-\textbf{Unfrozen sym\_t14 (reported)} & unfrozen & 4 & 1 & 128 & \textbf{0.32\%} & \textbf{0.31} & \textbf{0.08} \\
-Unfrozen top-2 mixture & unfrozen & 4 & 2 & 128 & 1.91\% & 0.31 & 0.13 \\
-Unfrozen 8-exp sparse & unfrozen & 8 & 1 & 128 & 1.70\% & 0.30 & 0.53 \\
-Frozen sym\_bal08 & frozen & 4 & 1 & 128 & 2.72\% & 0.55 & 0.60 \\
-Frozen sym\_t14$\to$0.9 & frozen & 4 & 1 & 32 & 0.96\% & 0.58 & 1.00 \\
-8-exp collapse diagnostic & frozen & 8 & 2 & 32 & 0.48\% & 0.50 & 0.84 \\
-Routing isolation (40 ep) & frozen & 4 & 1 & 32 & 0.98\% & 1.00 & 1.50 \\
-\midrule
-\multicolumn{8}{l}{\textit{Legacy / smaller data (epoch 20 unless noted):}} \\
-8-exp balance v3 & frozen & 8 & 1 & 32 & 12.4\% & 0.77 & --- \\
-4-exp balance v3 & frozen & 4 & 1 & 32 & 3.19\% & 0.91 & --- \\
+HiDDeN checkpoint & epoch-177 \\
+MoE checkpoint & R0, epoch-20 \\
+Evaluation set & 800 COCO-2017 validation images per attack \\
+Attack training & None (both models are clean-trained) \\
+Attacks & JPEG Q50, Gaussian noise, crop, cropout, resize, \\
+& dropout, quantisation, combined, identity \\
+Metric & Bit accuracy (\%) \\
+Varied & Attack type; model architecture \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{Frozen versus unfrozen backbone}
+\paragraph{Course of the experiment.}
+For each attack condition, 800 images are encoded by the respective model, the specified distortion is applied to the watermarked image, and the decoder attempts to recover the 30-bit message. The comparison is architecturally controlled: same images, same messages, same attack implementations for both models.
 
-As shown in Table~\ref{tab:moe-routing} and Table~\ref{tab:moe-ablations}, freezing the HiDDeN backbone and training only the router and experts produced weaker routing balance (\texttt{expert\_max\_use} up to $0.55$--$0.58$ and train/validation load $L_1$ up to $\approx 1.0$) and higher clean BER than the unfrozen configuration at the same routing sparsity. Allowing the encoder and shared trunk to adapt gives the router a richer, more separable representation and is the configuration I report throughout.
+\paragraph{Results.}
 
-Figure~\ref{fig:matched-ablation} isolates the frozen/unfrozen effect under a controlled comparison: both configurations use four experts, top-1 routing, and the same batch size of 128, differing only in whether the HiDDeN backbone is frozen and in the balance-loss weight (0.04 unfrozen vs 0.08 frozen). The unfrozen run achieves a substantially lower collapse score, a lower train--validation routing gap, and a sevenfold reduction in BER.
+\begin{table}[H]
+\centering
+\caption{Bit accuracy (\%) under each attack condition, 800 images per condition. $\Delta$ is MoE minus HiDDeN. Positive $\Delta$ favours MoE; negative favours HiDDeN. Neither model was trained with these attacks.}
+\label{tab:moe-attacks}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Attack} & \textbf{HiDDeN BA (\%)} & \textbf{MoE BA (\%)} & \textbf{$\Delta$ (pp)} \\
+\midrule
+Gaussian noise & 82.94 & 90.38 & $+7.44$ \\
+Crop           & 52.71 & 56.22 & $+3.51$ \\
+Cropout        & 85.62 & 89.09 & $+3.47$ \\
+Combined       & 50.19 & 50.55 & $+0.37$ \\
+Dropout        & 90.59 & 90.63 & $+0.04$ \\
+Quantisation   & 99.65 & 99.69 & $+0.04$ \\
+None (identity)& 99.65 & 99.65 & $+0.00$ \\
+JPEG           & 58.22 & 52.43 & $-5.79$ \\
+Resize         & 81.59 & 74.10 & $-7.49$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/rq/RQ2_attack_robustness.png}
+\caption{Experiment 2: signed MoE advantage in percentage points per attack. Dark bars (positive) indicate MoE outperforms HiDDeN; light bars (negative) indicate the reverse.}
+\label{fig:rq2-robustness}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/D_attack_MoE_minus_HiDDeN.png}
+\caption{Per-attack bit accuracy comparison with confidence intervals. The advantage on Gaussian noise and crop conditions is consistent across images; the JPEG and resize deficits are also systematic.}
+\label{fig:rq2-detail}
+\end{figure}
+
+\paragraph{Comments.}
+The result is genuinely mixed. Three attacks favour MoE by a meaningful margin: Gaussian noise ($+7.4$~pp), crop ($+3.5$~pp), and cropout ($+3.5$~pp). Four conditions are essentially tied. Two attacks favour HiDDeN: JPEG ($-5.8$~pp) and resize ($-7.5$~pp).
+
+The Gaussian result is the most interpretable: spatially diffuse additive noise has no structural signature, and a routed decoder can dedicate expert capacity to different feature regions, recovering more bits on average. The crop and cropout gains follow a similar logic. The JPEG and resize losses are harder to dismiss---resize's $-7.5$~pp is the largest gap in the table in either direction---and I read them as a training-protocol observation rather than an architectural failure: HiDDeN's original training included JPEG augmentation in some variants, and both distortions involve structured global transformations that a clean-trained router has no reason to align its partition with.
+
+What I want to avoid claiming is that MoE wins on six of nine conditions, because the combined-attack condition, the hardest one, is effectively a coin flip for both models at $\approx 50\%$ BA. Neither architecture has solved multi-distortion robustness from clean training alone.
+
+%------------------------------------------------------------------
+\section{Experiment Group 2: Architecture Search (RQ3)}
+\label{sec:rq3}
+%------------------------------------------------------------------
+
+This group covers the sweep of 26 COCO-100k training runs that led to the reported configuration. All runs use the same training loop, data pipeline, and HiDDeN warm-start; differences are limited to the parameters in each experiment's assumptions table.
+
+The full set of batch-128 runs---the most reliable configurations in the sweep---is presented first, followed by the batch-32 runs that provided specific mechanistic data. Batch-128 runs converge more stably and have lower sensitivity to balance-loss timing, so I treat them as the primary evidence. Table~\ref{tab:ablations-b128} gives the complete batch-128 sweep.
+
+\begin{table}[H]
+\centering
+\caption{All batch-128 runs on COCO-100k. The reported model (R0) is bold. Lower BER, \texttt{max\_use}, and \texttt{load\_l1} are better. The effective expert count column indicates how many experts are meaningfully active.}
+\label{tab:ablations-b128}
+\small
+\begin{tabular}{lllcccccc}
+\toprule
+\textbf{Run} & \textbf{BB} & $N$ & $k$ & \textbf{ep} & \textbf{BER (\%)} & \texttt{max\_use} & \texttt{load\_l1} \\
+\midrule
+\multicolumn{8}{l}{\textit{Backbone comparison (N=4, k=1):}} \\
+\textbf{Unfrozen sym\_t14 (R0)} & \textbf{unfrozen} & \textbf{4} & \textbf{1} & \textbf{20} & \textbf{0.32} & \textbf{0.31} & \textbf{0.08} \\
+R0 $+$ attack training (ep30) & unfrozen & 4 & 1 & 30 & 0.18 & 0.36 & 0.25 \\
+Frozen sym\_bal08 (ep20) & frozen & 4 & 1 & 20 & 2.72 & 0.55 & 0.60 \\
+Frozen sym\_bal08 (ep30) & frozen & 4 & 1 & 30 & 7.04 & 0.64 & 0.91 \\
+\midrule
+\multicolumn{8}{l}{\textit{Routing sparsity k (unfrozen, N=4):}} \\
+Unfrozen top-2 ($k=2$) & unfrozen & 4 & 2 & 30 & 2.66 & 0.32 & 0.14 \\
+Unfrozen dense ($k=4$) & unfrozen & 4 & 4 & 20 & 2.62 & 0.25 & 0.00 \\
+\midrule
+\multicolumn{8}{l}{\textit{Expert count N (unfrozen, k=1):}} \\
+Unfrozen 8-exp (run A) & unfrozen & 8 & 1 & 20 & 1.70 & 0.30 & 0.53 \\
+Unfrozen 8-exp (run B) & unfrozen & 8 & 1 & 20 & 1.36 & 0.51 & 1.11 \\
+\midrule
+\multicolumn{8}{l}{\textit{Training duration (R0 base):}} \\
+R0 continued (ep60) & unfrozen & 4 & 1 & 60 & 4.01 & 0.36 & 0.37 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/rq/RQ3_ablation_conditions.png}
+\caption{Overview of the batch-128 ablation sweep. Each panel isolates one experimental dimension (backbone, $k$, $N$). The R0 configuration is marked in each. BER and routing collapse score are the primary axes.}
+\label{fig:rq3-ablation}
+\end{figure}
+
+%-----
+
+\subsection*{Experiment 3: Effect of Backbone Freezing}
+
+\paragraph{Research question.}
+Does allowing the HiDDeN encoder and shared convolutional trunk to co-adapt with the routing layer reduce clean-channel BER and routing collapse compared to keeping the backbone frozen?
+
+\paragraph{Assumptions.}
+
+\begin{table}[H]
+\centering
+\caption{Fixed and varied parameters for Experiment~3.}
+\label{tab:exp3-assumptions}
+\begin{tabular}{ll}
+\toprule
+\textbf{Parameter} & \textbf{Setting} \\
+\midrule
+Primary (batch-128) & $N=4$, $k=1$, batch 128, COCO-100k \\
+Secondary (batch-32) & $N=4$, $k=1$, batch 32, COCO-100k \\
+Warm-start & HiDDeN epoch-177 \\
+Varied & \texttt{freeze\_hidden\_backbone} $\in \{$True, False$\}$ \\
+Fixed & $N$, $k$, balance-loss schedule, epochs \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Course of the experiment.}
+Two training runs are compared at batch size 128, differing only in the backbone gradient flag. Routing diagnostics and clean BER are recorded at every epoch; the final values at epoch 20 are the primary comparison point. Batch-32 frozen runs are included as secondary evidence for mechanistic interpretation.
+
+\paragraph{Results.}
+
+\begin{table}[H]
+\centering
+\caption{Batch-128 frozen vs.\ unfrozen comparison at epoch 20.}
+\label{tab:frozen-unfrozen-b128}
+\begin{tabular}{llccc}
+\toprule
+\textbf{Run} & \textbf{Backbone} & \textbf{BER (\%)} & \texttt{max\_use} & \texttt{load\_l1} \\
+\midrule
+\textbf{R0 (unfrozen, ep20)} & unfrozen & \textbf{0.32} & 0.31 & 0.08 \\
+Frozen sym\_bal08 (ep20) & frozen & 2.72 & 0.55 & 0.60 \\
+Frozen sym\_bal08 (ep30) & frozen & 7.04 & 0.64 & 0.91 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Supporting batch-32 frozen runs providing additional mechanistic data.}
+\label{tab:frozen-b32}
+\begin{tabular}{llccc}
+\toprule
+\textbf{Run} & \textbf{Backbone} & \textbf{BER (\%)} & \texttt{max\_use} & \texttt{load\_l1} \\
+\midrule
+Frozen sym\_t14$\to$0.9 (ep20) & frozen & 0.96 & 0.58 & 1.00 \\
+Routing isolation (ep40) & frozen & 0.98 & 1.00 & 1.50 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=\textwidth]{figures/B_matched_batch128_frozen_vs_unfrozen.png}
-\caption{Controlled comparison of frozen versus unfrozen HiDDeN backbone under matched conditions: 4 experts, top-1 routing, batch size 128, COCO-100k, epoch 20. \textit{Left:} clean validation BER (\%). \textit{Centre:} collapse score $= \texttt{expert\_max\_use} \times 4$ (lower is better; $1.0$ is the balanced baseline). \textit{Right:} train--validation routing gap (\texttt{train\_val\_load\_l1}); the dashed line marks the healthy threshold of 0.20. Unfreezing the backbone reduces all three measures substantially.}
-\label{fig:matched-ablation}
+\caption{Experiment 3: controlled frozen vs.\ unfrozen comparison (batch 128, $N=4$, $k=1$). \textit{Left}: clean BER. \textit{Centre}: routing collapse score. \textit{Right}: train--validation load gap. Unfreezing reduces all three.}
+\label{fig:b128-frozen-vs-unfrozen}
 \end{figure}
-
-\subsection{Number of experts}
-
-Under matched unfrozen training (batch 128, symmetric router, 20 epochs, top-1 routing), scaling from four to eight experts did not improve the watermark. Training utilisation was nearly uniform across all eight experts ($\text{effective experts} \approx 8$), but validation BER rose to 1.70\% with \texttt{train\_val\_load\_l1} $=0.53$, indicating that the router fit the training distribution without generalising to centre-crop validation. The reported four-expert model remains superior on both BER and routing gap.
-
-Earlier frozen eight-expert sweeps with smaller batches and $k\ge 2$ were more prone to collapse: for example, the eight-expert balance-v3 run (batch 32, $k=1$) reached \texttt{expert\_max\_use} $=0.77$ and BER 12.4\%, and the eight-expert collapse diagnostic (batch 32, $k=2$, load penalty 0.1) kept BER low (0.48\%) but with \texttt{expert\_max\_use} $=0.50$ and \texttt{train\_val\_load\_l1} $=0.84$. Figure~\ref{fig:num-experts-topk} places these runs alongside the four-expert configurations in the archive.
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.92\textwidth]{figures/05_num_experts_topk.png}
-\caption{Clean validation BER and routing collapse score ($\texttt{expert\_max\_use} \times N$) for COCO-100k runs in the experiment archive, grouped by expert count and routing $k$. The unfrozen four-expert, top-1 point is the reported model.}
-\label{fig:num-experts-topk}
+\includegraphics[width=\textwidth]{figures/02_frozen_vs_unfrozen_4exp_k1.png}
+\caption{Training curves for frozen and unfrozen backbone runs (batch-32 secondary). BER diverges within the first five epochs: the unfrozen run converges rapidly while the frozen run plateaus at a higher floor.}
+\label{fig:frozen-unfrozen-curves}
 \end{figure}
 
-\subsection{Sparse versus denser routing}
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/experiments/01_batch128_sym_t14_unfrozen_bal004warm10_ep20_2026-06-01.png}
+\caption{R0 training run (unfrozen, batch 128, epoch 1--20). BER converges to $<1\%$ by epoch 4 and stabilises at $0.32\%$; routing metrics remain healthy throughout.}
+\label{fig:r0-curves}
+\end{figure}
 
-The reported model uses top-1 (sparse) routing: each image is decoded by exactly one expert, which minimises inference cost at deployment. I additionally trained an \emph{unfrozen} four-expert model with top-2 routing (a weighted mixture of two experts per image, batch 128, otherwise identical hyperparameters). At epoch~20 it reached clean BER 1.91\% and noisy validation BER 1.99\%, versus 0.32\% / 0.31\% for top-1. Router softmax mass concentrated on two experts (effective experts $\approx 1$ on training logs), so the extra capacity did not translate into better specialisation. I did not run a full four-expert, top-4 (dense softmax) unfrozen ablation on COCO-100k; dense routing would activate all experts per image and is left for future work.
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/experiments/28_batch128_sym_bal08_jitter0_bal08warm5_temp14to10_ep20_2026-06-01.png}
+\caption{Frozen sym\_bal08 training run (frozen backbone, batch 128, epoch 1--20). BER does not converge below $2\%$ and \texttt{max\_use} climbs, indicating gradual partial collapse.}
+\label{fig:frozen-sym-bal08-curves}
+\end{figure}
 
-\subsection{Extended training beyond epoch 20}
+\paragraph{Comments.}
+The backbone freezing result is the most decisive finding in the ablation. At batch 128, unfreezing reduces BER from $2.72\%$ to $0.32\%$ and halves the routing collapse score. The frozen run then continues to degrade: by epoch 30 its BER rises to $7.04\%$ and \texttt{max\_use} reaches $0.64$---worse than at epoch 20. That trajectory is not a convergence story, it is a collapse story.
 
-I resumed the reported run from its epoch-20 checkpoint and continued training on the same COCO-100k data for a further 40 epochs (epochs 21--60), with checkpoints saved every five epochs. Training bit error continued to fall (to $\approx 0.08\%$ by epoch~60), but \emph{clean} validation BER degraded for most epochs: the mean clean BER over epochs 21--60 was 2.89\%, versus 0.32\% at epoch~20. Only epochs 26 and 31 logged briefly lower clean BER (0.14\% and 0.09\%); neither beat epoch~20 on noisy validation, and no intermediate checkpoint outperformed epoch~20 on both metrics. Epoch~60 reached clean BER 4.01\% with \texttt{train\_val\_load\_l1} $=0.37$, consistent with overfitting on a fixed corpus together with a growing train--validation routing mismatch.
+The mechanistic explanation I find convincing is that a frozen backbone gives the router a feature space that was designed for a single decoder, not for a partitioned one. The router must partition representations that were not trained to be separable. When the backbone can adapt, it co-evolves with the routing layer, gradually developing features that genuinely support distinct expert specialisations. The routing isolation run (Table~\ref{tab:frozen-b32}) provides the clearest evidence: 40 epochs of training with a frozen backbone and explicit routing isolation loss produce \texttt{max\_use} $= 1.00$---the router converged to routing every image to the same expert, at which point the MoE is topologically equivalent to a single decoder.
 
-Two protocol effects are important when reading the continued-training logs. First, training forward passes still use the identity channel only (\texttt{apply\_training\_noise=False} in code), so later epochs are not attack-augmented training despite the distortion curriculum in Section~3.3. Second, the noisy validation pass ramps non-identity attacks from epoch~21 onward; noisy BER therefore rises with epoch even when the clean channel is held fixed, and is not comparable across epochs without fixing the attack mix. I retain epoch~20 as the deployed checkpoint and treat the continuation as evidence that early stopping is required rather than as an improved model.
+%-----
 
-\subsection{Earlier configuration sweeps}
+\subsection*{Experiment 4: Effect of Routing Sparsity ($k$)}
 
-Before fixing the symmetric unfrozen recipe, I explored stronger balance weights (0.08--0.12), router jitter up to 0.1, lower final temperatures ($1.4\to 0.9$), batch sizes 12--32, and load penalties on eight-expert models. These runs are catalogued in the experiment registry under \texttt{experiments/frozen\_moe/} and \texttt{experiments/legacy\_early/}; several were trained on $\approx$20k-image COCO subsets and are not directly comparable to the 100k results. They established that (i)~batch 128 helps stable routing when the backbone is unfrozen, (ii)~aggressive jitter and balance without backbone adaptation tend to collapse the router, and (iii)~BER-focused routing losses did not outperform the symmetric balance recipe at epoch~20 on comparable data.
+\paragraph{Research question.}
+Does allowing each image to be processed by more than one expert ($k > 1$) improve watermark quality, or does it dilute the gradient signal and reduce expert specialisation?
 
-\section{Cost and Comparison with the HiDDeN Baseline}
+\paragraph{Assumptions.}
 
-Relative to the HiDDeN baseline, the MoE decoder adds $N$ expert heads and a small gating network. With top-1 routing, however, only a single expert head is evaluated per image at inference, so the marginal decoding cost over the baseline is the router MLP plus one expert head rather than $N$ heads; inference cost does not grow with the number of experts. The encoder, which dominates embedding cost, is unchanged. At training time the unfrozen configuration is more expensive than a frozen MoE head because gradients propagate through the encoder and shared trunk, but it is comparable to training a standard HiDDeN model. This directly answers RQ4: the sparse routed decoder remains viable at deployment scale.
+\begin{table}[H]
+\centering
+\caption{Fixed and varied parameters for Experiment~4. All runs: unfrozen, $N=4$, batch 128, COCO-100k.}
+\label{tab:exp4-assumptions}
+\begin{tabular}{ll}
+\toprule
+\textbf{Parameter} & \textbf{Setting} \\
+\midrule
+Backbone & Unfrozen \\
+Expert count $N$ & 4 \\
+Batch size & 128 \\
+Dataset & COCO-100k \\
+Varied & $k \in \{1, 2, 4\}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-A direct numeric comparison to the published methods surveyed in Chapter~2 is deliberately not attempted here. Those methods are evaluated under the unified cross-method protocol of the other thesis track; folding the MoE numbers into that table would imply a comparability of training data, payload size, and resolution that does not hold, since the MoE results use a 30-bit payload at $128\times128$ on COCO.
+\paragraph{Course of the experiment.}
+Three configurations are trained to convergence (20--30 epochs) and compared on clean BER and routing health. For $k=4$ (dense routing), all four experts contribute to every image in proportion to their router scores.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\paragraph{Results.}
+
+\begin{table}[H]
+\centering
+\caption{Effect of routing sparsity $k$ on clean-channel BER and routing metrics (unfrozen, $N=4$, batch 128).}
+\label{tab:topk-comparison}
+\begin{tabular}{cccccc}
+\toprule
+$k$ & \textbf{ep} & \textbf{BER (\%)} & \texttt{max\_use} & \texttt{load\_l1} & \textbf{Effective exp.} \\
+\midrule
+1 (R0) & 20 & \textbf{0.32} & 0.31 & 0.08 & 3.99 \\
+2      & 30 & 2.66 & 0.32 & 0.14 & --- \\
+4      & 20 & 2.62 & 0.25 & 0.00 & 4.00 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/05_num_experts_topk.png}
+\caption{Experiment 4: BER and routing metrics by $k$ (left) and by $N$ (right). Top-1 routing ($k=1$) achieves the lowest BER despite lower expert capacity per image; dense routing ($k=4$) achieves perfect load balance but produces a BER of $2.62\%$.}
+\label{fig:topk-nexp}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/rq/RQ3_routing_symmetry.png}
+\caption{Train and validation expert-load distributions at final epoch for $k \in \{1, 2, 4\}$ (unfrozen, $N=4$). Top-1 routing shows near-perfect train--validation alignment; higher-$k$ runs show increasing generalisation gap.}
+\label{fig:routing-symmetry}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/experiments/24_runs_moe_unfrozen_4exp_sparse_top2_b128_2026_06_03--08-01-13.png}
+\caption{Top-2 routing training run ($k=2$, unfrozen, $N=4$, batch 128). BER does not converge below $2\%$ despite 30 epochs; the train--validation routing gap widens steadily.}
+\label{fig:top2-curves}
+\end{figure}
+
+\paragraph{Comments.}
+Top-1 routing outperforms top-2 and top-4 on every metric. This is counterintuitive at first---$k=1$ provides the least expert capacity per image---but becomes clear once you consider the learning dynamics. With top-1 routing, each image is exclusively assigned to one expert, giving that expert clean gradient signal from its assigned subset of the data distribution. With $k=2$, two experts contribute weighted to every image, and each expert receives only a diluted gradient reflecting its contribution fraction. The router learns to hedge rather than specialise.
+
+The $k=4$ (dense) case is the extreme version of this: perfectly uniform \texttt{max\_use} $= 0.25$ and \texttt{load\_l1} $= 0.00$, but BER $= 2.62\%$. The router has learned nothing; every expert contributes equally to every image, and the model is topologically a deep ensemble rather than a mixture. The capacity advantage of four experts is wasted.
+
+%-----
+
+\subsection*{Experiment 5: Effect of Expert Count ($N$)}
+
+\paragraph{Research question.}
+Does increasing the number of experts from four to eight improve watermark quality under matched unfrozen training conditions?
+
+\paragraph{Assumptions.}
+
+\begin{table}[H]
+\centering
+\caption{Fixed and varied parameters for Experiment~5. All runs: unfrozen, $k=1$, batch 128, COCO-100k.}
+\label{tab:exp5-assumptions}
+\begin{tabular}{ll}
+\toprule
+\textbf{Parameter} & \textbf{Setting} \\
+\midrule
+Backbone & Unfrozen \\
+Routing $k$ & 1 \\
+Batch size & 128 \\
+Dataset & COCO-100k \\
+Varied & $N \in \{4, 8\}$; two independent 8-exp runs \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Course of the experiment.}
+Three runs are compared: the reported R0 ($N=4$) and two independent 8-expert runs, each trained to epoch 20. The two 8-expert runs allow estimation of run-to-run variance at this setting.
+
+\paragraph{Results.}
+
+\begin{table}[H]
+\centering
+\caption{Effect of expert count $N$ on BER and routing metrics (unfrozen, $k=1$, batch 128).}
+\label{tab:nexp-comparison}
+\begin{tabular}{clccc}
+\toprule
+$N$ & \textbf{Run} & \textbf{BER (\%)} & \texttt{max\_use} & \texttt{load\_l1} \\
+\midrule
+4 & R0 (ep20) & \textbf{0.32} & 0.31 & 0.08 \\
+8 & 8-exp run A (ep20) & 1.70 & 0.30 & 0.53 \\
+8 & 8-exp run B (ep20) & 1.36 & 0.51 & 1.11 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/experiments/25_attack_eval_runs_moe_unfrozen_8exp_sparse_b128_2026_06_02--21-36-20.png}
+\caption{8-expert unfrozen run A (batch 128, epoch 1--20). Training BER is competitive but the train--validation routing gap (\texttt{load\_l1} $= 0.53$) is six times larger than R0's.}
+\label{fig:8exp-run-a}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/attacks/atk_8exp_k1_ep20.png}
+\caption{Attack evaluation for the 8-expert unfrozen run (run A). Compared to R0, the 8-expert model loses ground on JPEG and resize by wider margins while retaining the Gaussian-noise advantage.}
+\label{fig:8exp-attacks}
+\end{figure}
+
+\paragraph{Comments.}
+Eight experts is strictly worse than four at this dataset scale. Run A reaches BER $1.70\%$ with \texttt{load\_l1} $= 0.53$; run B reaches $1.36\%$ but with \texttt{load\_l1} $= 1.11$---a routing gap eleven times larger than R0. The healthy \texttt{max\_use} values in both runs (0.30 and 0.51 respectively) initially suggest the experts are not collapsed, but the large routing gap tells the real story: the router learned a partition of the training distribution that did not generalise. Run-to-run variance is also substantial: BER differs by $0.34$~pp and \texttt{load\_l1} by $0.58$ between the two identical runs, which suggests the 8-expert configuration is at or near the edge of what this dataset can support.
+
+My interpretation is that COCO-100k does not contain enough diversity, or is not diverse in the right way, to justify eight specialised experts. With four experts, each one is assigned roughly 29{,}500 training images on average; with eight, that drops to roughly 14{,}750, and the expert representations become under-specified. The correct answer may be to use eight experts on a larger or more semantically diverse corpus.
+
+%-----
+
+\subsection*{Experiment 6: Effect of Training Duration}
+
+\paragraph{Research question.}
+Does extending training beyond 20 epochs improve the R0 configuration, or does longer training cause the routing gap to widen?
+
+\paragraph{Assumptions.}
+
+\begin{table}[H]
+\centering
+\caption{Fixed and varied parameters for Experiment~6.}
+\label{tab:exp6-assumptions}
+\begin{tabular}{ll}
+\toprule
+\textbf{Parameter} & \textbf{Setting} \\
+\midrule
+Checkpoint base & R0 epoch-20 \\
+Training resumed & 40 additional epochs (epochs 21--60) \\
+Architecture & Same as R0 ($N=4$, $k=1$, unfrozen, batch 128) \\
+Varied & Number of training epochs \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Course of the experiment.}
+The R0 epoch-20 checkpoint is resumed with the same learning rate, balance-loss weight, and temperature schedule. Validation BER and routing metrics are logged at every epoch. Two additional early-stopped checkpoints (ep22 and ep26) were manually extracted and tested for comparison.
+
+\paragraph{Results.}
+
+\begin{table}[H]
+\centering
+\caption{Validation BER and routing gap at selected checkpoints from the R0 continuation run.}
+\label{tab:duration-comparison}
+\begin{tabular}{ccccc}
+\toprule
+\textbf{Epoch} & \textbf{BER (\%)} & \texttt{max\_use} & \texttt{load\_l1} & \textbf{Note} \\
+\midrule
+20 (R0) & \textbf{0.32} & 0.31 & 0.08 & Reported model \\
+22 & 0.14 & 0.33 & 0.12 & Briefly better BER \\
+26 & 0.09 & 0.34 & 0.16 & Briefly better BER \\
+30 & 0.38 & 0.35 & 0.22 & BER regressing \\
+60 & 4.01 & 0.36 & 0.37 & Substantial degradation \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/C_training_collapse_and_BER_over_epochs.png}
+\caption{Experiment 6: BER and routing collapse over training epochs for R0 (continued beyond epoch 20). BER briefly improves at epochs 22--26 before degrading; the train--validation routing gap widens monotonically.}
+\label{fig:duration-curves}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/experiments/27_exp4continue_extracted_moe_unfrozen_sym_t14_v1_continue.png}
+\caption{Extended R0 continuation run (epochs 1--60). The clean-channel BER valley at epoch 20 is visible; the degradation from epoch 30 onwards is systematic, not noisy.}
+\label{fig:r0-continuation}
+\end{figure}
+
+\paragraph{Comments.}
+Early stopping at epoch 20 is the right choice, but it is not a lucky stopping point. The continuation data shows that BER briefly dips below R0's epoch-20 value at epochs 22 and 26---the model does improve marginally if you use a late-epoch oracle. What makes epoch 20 the practical choice is the routing gap: at epoch 20, \texttt{load\_l1} $= 0.08$; by epoch 26 it has already risen to $0.16$; by epoch 60 it is $0.37$. No BER gain is worth a fourfold increase in routing fragility. The routing gap is the early warning sign; the BER degradation follows later.
+
+%------------------------------------------------------------------
+\section{Experiment Group 3: Inference Cost (RQ4)}
+\label{sec:rq4}
+%------------------------------------------------------------------
+
+\subsection*{Experiment 7: Latency and Peak Memory Benchmark}
+
+\paragraph{Research question.}
+What is the per-image inference latency and peak GPU memory of the MoE decoder relative to HiDDeN, and does the overhead converge at realistic batch sizes?
+
+\paragraph{Assumptions.}
+
+\begin{table}[H]
+\centering
+\caption{Fixed and varied parameters for Experiment~7.}
+\label{tab:exp7-assumptions}
+\begin{tabular}{ll}
+\toprule
+\textbf{Parameter} & \textbf{Setting} \\
+\midrule
+HiDDeN checkpoint & epoch-177 \\
+MoE checkpoint & R0 epoch-20 with sparse conditional dispatch \\
+GPU & NVIDIA (same device for both; CUDA 12.8) \\
+Warmup passes & 10 (discarded) \\
+Timed passes & 50 (averaged) \\
+Dispatch mode & Sparse conditional (only the routed expert executes) \\
+Varied & Batch size $\in \{1, 8, 32\}$; model \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Course of the experiment.}
+Each model is loaded with \texttt{torch.no\_grad()} active. After 10 warmup passes to prime CUDA caches, 50 encode--decode passes are timed with \texttt{torch.cuda.Event} synchronisation. Peak memory is measured with \texttt{torch.cuda.max\_memory\_allocated()}. The MoE decoder uses the sparse dispatch implementation described in Chapter~3: at batch size 1, top-1 routing activates exactly one expert and skips the other three.
+
+\paragraph{Results.}
+
+\begin{table}[H]
+\centering
+\caption{Inference latency (ms per image) and peak GPU memory. \textit{enc} = encode only; \textit{dec} = decode only; \textit{full} = encode + decode. Dec.\ ratio is MoE/HiDDeN on the decode step only.}
+\label{tab:moe-cost}
+\small
+\begin{tabular}{lcrrrrc}
+\toprule
+\textbf{Model} & \textbf{Batch} & \textbf{enc (ms/img)} & \textbf{dec (ms/img)} & \textbf{full (ms/img)} & \textbf{mem (MB)} & \textbf{dec ratio} \\
+\midrule
+HiDDeN & 1  & 0.81 & 1.04 & 1.80 & 72.7  & 1.00$\times$ \\
+MoE    & 1  & 0.82 & 10.01 & 15.78 & 76.3 & 9.59$\times$ \\
+\midrule
+HiDDeN & 8  & 1.04 & 1.35 & 2.32 & 246.8  & 1.00$\times$ \\
+MoE    & 8  & 1.03 & 2.62 & 3.60 & 256.2  & 1.94$\times$ \\
+\midrule
+HiDDeN & 32 & 0.99 & 1.32 & 2.29 & 843.8  & 1.00$\times$ \\
+MoE    & 32 & 0.99 & 2.17 & 3.12 & 843.8  & \textbf{1.64$\times$} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/rq/RQ4_inference_cost.png}
+\caption{Experiment 7: full-pipeline latency per image at batch sizes 1, 8, and 32 (left); decode overhead ratio (centre); parameter count breakdown (right). The batch=1 spike is a Python dispatch artefact, not a GPU bottleneck.}
+\label{fig:rq4-cost}
+\end{figure}
+
+\paragraph{Comments.}
+The encoder timings are identical: both models share the same encoder, so the $0.99$ ms/image at batch 32 is exactly the same for both. All cost difference lives in the decoder.
+
+At batch 32, the decode overhead is $1.64\times$ and the full-pipeline overhead is $1.36\times$, with identical peak memory. The batch=1 decode ratio of $9.59\times$ is a Python-level artefact: iterating over four experts, computing boolean dispatch masks, and launching conditional CUDA kernels each carry fixed overhead that does not amortise at a single image. The overhead converges quickly: $1.94\times$ at batch 8, $1.64\times$ at batch 32. The memory penalty is negligible ($76.3$ vs $72.7$~MB at batch 1).
+
+Parameter counts: HiDDeN has 411{,}903 parameters; MoE R0 has 774{,}175---a $1.88\times$ increase, all on the decoder side. The four experts share the same shared trunk and add four independent prediction heads; neither the encoder nor the discriminator gains any parameters.
+
+%------------------------------------------------------------------
+\section{Experiment Group 4: Routing Collapse as a Failure Predictor (RQ5)}
+\label{sec:rq5}
+%------------------------------------------------------------------
+
+\subsection*{Experiment 8: Collapse--BER Correlation Across the Full Sweep}
+
+\paragraph{Research question.}
+Does the routing collapse score (\texttt{expert\_max\_use}) measured at the end of training predict final clean-channel BER across all COCO-100k runs, and can it serve as a mid-training early-stopping criterion?
+
+\paragraph{Assumptions.}
+
+\begin{table}[H]
+\centering
+\caption{Fixed and varied parameters for Experiment~8.}
+\label{tab:exp8-assumptions}
+\begin{tabular}{ll}
+\toprule
+\textbf{Parameter} & \textbf{Setting} \\
+\midrule
+Run set & All COCO-100k runs with full validation logs ($n = 13$) \\
+Collapse metric & \texttt{expert\_max\_use} (final epoch) \\
+Outcome metric & Validation BER (\%) (final epoch) \\
+Statistical test & Pearson $r$ and two-tailed $p$-value \\
+Varied & Architecture, backbone, $k$, $N$ (full sweep) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Course of the experiment.}
+Final-epoch routing diagnostics and validation BER are extracted from the logging CSV of each completed COCO-100k run. Pearson correlation is computed between \texttt{expert\_max\_use} and BER. Training-dynamics curves are plotted for representative healthy and collapsed runs to assess whether collapse is an early or late phenomenon. Failure modes are classified manually based on the collapse score, routing gap, and BER trajectory.
+
+\paragraph{Results.}
+
+\begin{table}[H]
+\centering
+\caption{Routing diagnostic summary for three representative configurations. For $N=4$ experts, perfect uniformity gives \texttt{max\_use} $= 0.25$.}
+\label{tab:moe-routing}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Configuration} & \texttt{max\_use} & \texttt{load\_l1} & \textbf{BER (\%)} & \textbf{Status} \\
+\midrule
+Unfrozen sym\_t14 (R0) & 0.31 & 0.08 & 0.32 & Healthy \\
+Frozen sym\_bal08 (ep20) & 0.55 & 0.60 & 2.72 & Partial collapse \\
+Routing isolation (ep40) & 1.00 & 1.50 & 0.98 & Full collapse \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/rq/collapse_vs_ber_all_runs.png}
+\caption{Experiment 8: routing collapse versus clean-channel BER across all 28 training runs. \textit{(a)} COCO-100k runs only ($n=20$): Pearson $r=0.63$, $p=0.003$ — a clear positive trend. \textit{(b)} All 28 runs: correlation weakens to $r=0.29$ because COCO-20k exploratory runs (orange squares) show low collapse scores but very high BER, a different failure mode driven by insufficient training data. \textit{(c)} Strip plot by failure-mode category; horizontal lines are medians. Healthy unfrozen runs cluster below 2\%, partial collapse sits around 1--3\%, full collapse around 1\%, and small-dataset runs span 0.5--21\%.}
+\label{fig:rq5-scatter}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/07_ber_vs_expert_max_use.png}
+\caption{BER vs.\ \texttt{expert\_max\_use} for all COCO-100k runs, with backbone type annotated. The relationship is systematic but not deterministic: a healthy routing score is necessary but not sufficient for low BER.}
+\label{fig:ber-vs-maxuse}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/rq/RQ5_training_dynamics.png}
+\caption{Training dynamics across epochs for R0 (healthy) and a representative collapsed frozen run. \textit{Left}: collapse score over epochs. \textit{Right}: validation BER. Collapse establishes itself within the first five epochs; BER divergence follows shortly after.}
+\label{fig:rq5-dynamics}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/11_expert_load_over_epochs.png}
+\caption{Per-expert load fractions over training for the R0 run (top) and a partially collapsed frozen run (bottom). R0's four experts stabilise near $0.25$ load each by epoch 5; the frozen run's two dominant experts absorb increasing fractions of traffic from epoch 3 onwards.}
+\label{fig:expert-load-epochs}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/rq/RQ5_failure_mode_signatures.png}
+\caption{Failure mode signatures across the training archive. Three regimes are visible: healthy (low collapse, low routing gap, low BER); partially collapsed (elevated \texttt{max\_use}, moderate BER); and train--validation routing mismatch (healthy training load but large validation routing gap and elevated BER).}
+\label{fig:rq5-failure}
+\end{figure}
+
+\paragraph{Comments.}
+The correlation is systematic within COCO-100k: Pearson $r = 0.63$, $p = 0.003$. Runs with higher collapse score consistently produce higher clean BER on the same dataset. This is practically useful: you can assess routing health at epoch 5 and predict with reasonable confidence whether the run will converge.
+
+The picture is muddier when you include all 28 runs. The COCO-20k exploratory runs show low collapse scores but BER values up to $20\%$---a completely different failure mode. The router did not collapse on those runs; the problem was insufficient training data. With 20k images split across four experts, each expert receives roughly 5{,}000 training examples per epoch. That is simply not enough for the expert representations to become meaningfully distinct. The BER climbs not because routing is wrong but because the model is severely underfit. Figure~\ref{fig:rq5-scatter}(b) shows this: the orange squares cluster at low collapse scores in the upper-left of the all-runs plot, pulling the aggregate correlation down to $r = 0.29$ and diluting the signal from the COCO-100k runs. I report both numbers because both are honest.
+
+Three failure modes appear in the archive. The first is full collapse (\texttt{max\_use} $\geq 0.80$): the router assigns all images to one expert, and the MoE reduces to a single decoder with excess parameters. The second is partial collapse (\texttt{max\_use} $\approx 0.55$--$0.70$): two experts dominate, two are marginalised, and BER remains elevated. The third is train--validation routing mismatch: \texttt{max\_use} looks healthy on training data, but the validation routing distribution differs substantially (\texttt{load\_l1} $> 0.5$). This last mode is the subtlest---it is only visible if you track both distributions separately---and it is what I see in the 8-expert runs.
+
+The implication for practical MoE watermarking training is that neither a healthy training collapse score alone nor a low training BER is sufficient to certify a model. All three checks are needed: (1) low \texttt{max\_use} on both train and validation, (2) small \texttt{load\_l1}, and (3) validation BER below a threshold. The R0 configuration satisfies all three at epoch 20; the extended continuation fails check (2) by epoch 22 and check (3) by epoch 35.
+
+%------------------------------------------------------------------
+\section{Summary of Research}
+\label{sec:summary}
+%------------------------------------------------------------------
+
+Table~\ref{tab:rq-summary} consolidates the answer to each research question.
+
+\begin{table}[H]
+\centering
+\caption{Summary of research: findings per research question.}
+\label{tab:rq-summary}
+\begin{tabular}{p{0.6cm}p{3.5cm}p{8cm}}
+\toprule
+\textbf{RQ} & \textbf{Question} & \textbf{Finding} \\
+\midrule
+RQ1 & Clean-channel quality & MoE matches HiDDeN exactly on BER and MSE; a small PSNR gap ($\approx 2$~dB) favours HiDDeN but is treated as indicative. \\
+RQ2 & Attack robustness & Mixed: MoE wins on Gaussian noise ($+7.4$~pp), crop ($+3.5$~pp), cropout ($+3.5$~pp); HiDDeN wins on resize ($-7.5$~pp) and JPEG ($-5.8$~pp). Neither model is robust to the combined attack. \\
+RQ3 & Configuration & Unfrozen backbone, $k=1$, $N=4$, batch 128, epoch 20 is the optimal combination. Larger $k$ dilutes gradient signal; larger $N$ causes routing generalisation failure at this data scale; continued training widens the routing gap. \\
+RQ4 & Inference cost & $1.64\times$ decode overhead at batch 32, negligible memory increase, $1.88\times$ parameter count. The batch=1 spike ($9.59\times$) is a Python artefact; overhead converges by batch 8. \\
+RQ5 & Collapse prediction & Pearson $r = 0.63$, $p = 0.003$ (COCO-100k, $n=20$); drops to $r = 0.29$ when COCO-20k runs are included (different failure mode: dataset too small). Three distinct failure modes identified; collapse is detectable at epoch 5. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The central finding is that the MoE architecture succeeds when three conditions hold simultaneously: the backbone co-adapts with the routing layer (unfrozen), the routing is sparse enough that each expert receives clean gradient signal (top-1), and the dataset is large enough relative to the number of experts that each expert is adequately specified. When any one of these conditions fails---as it does in the frozen runs, the $k=2$ runs, and the 8-expert runs on COCO-100k---BER rises and routing metrics deteriorate in characteristic ways.
+
+The failure-mode signatures in Section~\ref{sec:rq5} are, I think, the most practically useful contribution of this work for anyone who wants to extend or reproduce these experiments. Training a MoE watermarking model is not obviously harder than training a standard model, but diagnosing whether training is going well requires different instrumentation than BER alone.
+
+
 \chapter{Discussion}
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 

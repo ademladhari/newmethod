@@ -164,21 +164,31 @@ def evaluate_attack(
 
 
 def build_val_loader(data_dir: Path, val_folder: str, batch_size: int, hidden_config, num_workers: int):
-    sys.path.insert(0, str(HIDDEN_DIR))
-    import utils as hidden_utils  # noqa: E402
-    from options import TrainingOptions  # noqa: E402
+    """Validation-only loader — does not require a train/ subfolder."""
+    from torchvision import transforms
+    from torch.utils.data import DataLoader
 
-    eval_options = TrainingOptions(
-        batch_size=batch_size,
-        number_of_epochs=1,
-        train_folder=str(data_dir / "train"),
-        validation_folder=str(data_dir / val_folder),
-        runs_folder=".",
-        start_epoch=1,
-        experiment_name="attack_eval",
+    sys.path.insert(0, str(HIDDEN_DIR))
+    from utils import FlatImageFolder  # noqa: E402
+
+    val_dir = data_dir / val_folder
+    if not val_dir.is_dir():
+        raise SystemExit(f"Missing image folder: {val_dir}")
+
+    transform = transforms.Compose(
+        [
+            transforms.CenterCrop((hidden_config.H, hidden_config.W)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
+        ]
     )
-    _, val_loader = hidden_utils.get_data_loaders(hidden_config, eval_options)
-    return val_loader
+    dataset = FlatImageFolder(str(val_dir), transform=transform)
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+    )
 
 
 def parse_attacks(attacks_arg: str, device: torch.device) -> dict[str, list]:
@@ -211,15 +221,33 @@ def main():
     parser.add_argument("--moe-checkpoint", type=Path, default=DEFAULT_MOE_CKPT)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--hidden-only", action="store_true", help="Skip MoE (baseline only).")
-    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument(
+        "--device",
+        default="cuda" if torch.cuda.is_available() else "cpu",
+        help="cuda (RTX 50xx needs PyTorch cu128 nightly — see scripts/setup_pytorch_cu128.ps1)",
+    )
     parser.add_argument("--num-workers", type=int, default=0)
     args = parser.parse_args()
 
     device = torch.device(args.device)
+    if device.type == "cuda" and not torch.cuda.is_available():
+        ver = getattr(torch, "__version__", "?")
+        raise SystemExit(
+            "CUDA requested but PyTorch cannot use the GPU.\n"
+            f"  torch={ver}\n"
+            "  RTX 5060 needs cu128 nightly (not CPU torch from plain pip install).\n"
+            "  From repo root: .\\scripts\\setup_pytorch_cu128.ps1\n"
+            "  Then run: .\\.venv\\Scripts\\python scripts\\compare_hidden_vs_moe_attacks.py --device cuda ..."
+        )
     cmp = _import_compare()
     hidden_options = args.hidden_options or (args.hidden_run_folder / "options-and-config.pickle")
 
-    print("Device:", device)
+    print("Device:", device, end="")
+    if device.type == "cuda":
+        print(f" ({torch.cuda.get_device_name(0)})", end="")
+    elif "+cpu" in torch.__version__.lower():
+        print(" — WARNING: CPU-only PyTorch; use .venv after setup_pytorch_cu128.ps1", end="")
+    print()
     print("HiDDeN checkpoint:", args.hidden_checkpoint)
     hidden_model, hidden_cfg, _ = cmp.load_hidden_baseline(
         args.hidden_checkpoint, hidden_options, device

@@ -16,6 +16,31 @@ from model.hidden_moe import HiddenMoE
 from options_moe import HiDDenMoEConfiguration, TrainingOptions
 
 
+def _finalize_schedule_config(hidden_config, train_options, command: str):
+    """
+    Router temperature and attack ramp use schedule_total_epochs (fixed at `new`).
+    number_of_epochs may increase on `continue` without resetting the temperature curve.
+    """
+    if command == "new":
+        hidden_config.schedule_total_epochs = train_options.number_of_epochs
+        hidden_config.attack_schedule_end_epoch = train_options.number_of_epochs
+        return
+
+    if not getattr(hidden_config, "schedule_total_epochs", None):
+        hidden_config.schedule_total_epochs = train_options.number_of_epochs
+    if not getattr(hidden_config, "attack_schedule_identity_epochs", None):
+        hidden_config.attack_schedule_identity_epochs = 20
+    if not getattr(hidden_config, "attack_schedule_end_epoch", None):
+        hidden_config.attack_schedule_end_epoch = max(80, int(hidden_config.schedule_total_epochs))
+
+
+def _save_run_options(options_file: str, train_options, noise_config, hidden_config):
+    with open(options_file, "wb+") as f:
+        pickle.dump(train_options, f)
+        pickle.dump(noise_config, f)
+        pickle.dump(hidden_config, f)
+
+
 def get_data_loaders(
     hidden_config,
     train_options,
@@ -524,9 +549,13 @@ def main():
             ("freeze_hidden_backbone", False),
             ("freeze_discriminator", False),
             ("apply_training_noise", False),
+            ("schedule_total_epochs", None),
+            ("attack_schedule_identity_epochs", 20),
+            ("attack_schedule_end_epoch", None),
         ):
             if not hasattr(hidden_config, key):
                 setattr(hidden_config, key, default_value)
+        _finalize_schedule_config(hidden_config, train_options, "continue")
         if args.freeze_hidden_backbone is not None:
             hidden_config.freeze_hidden_backbone = args.freeze_hidden_backbone.lower() == "true"
         if args.freeze_discriminator is not None:
@@ -541,12 +570,13 @@ def main():
             train_options.train_folder = os.path.join(args.data_dir, "train")
             train_options.validation_folder = os.path.join(args.data_dir, "val")
         if args.epochs is not None:
-            if train_options.start_epoch < args.epochs:
+            if train_options.start_epoch <= args.epochs:
                 train_options.number_of_epochs = args.epochs
             else:
                 raise ValueError(
                     "Requested epochs {} but checkpoint already at {}.".format(args.epochs, train_options.start_epoch)
                 )
+        _save_run_options(options_file, train_options, noise_config, hidden_config)
     else:
         assert args.command == "new"
         train_options = TrainingOptions(
@@ -598,10 +628,9 @@ def main():
             apply_training_noise=args.apply_training_noise,
         )
         this_run_folder = utils.create_folder_for_run(train_options.runs_folder, args.name)
-        with open(os.path.join(this_run_folder, "options-and-config.pickle"), "wb+") as f:
-            pickle.dump(train_options, f)
-            pickle.dump([], f)
-            pickle.dump(hidden_config, f)
+        _finalize_schedule_config(hidden_config, train_options, "new")
+        options_file = os.path.join(this_run_folder, "options-and-config.pickle")
+        _save_run_options(options_file, train_options, [], hidden_config)
 
     logging.basicConfig(
         level=logging.INFO,
@@ -650,6 +679,14 @@ def main():
     if args.command == "continue":
         logging.info("Loading checkpoint from file {}".format(loaded_checkpoint_file_name))
         model.load_from_checkpoint(checkpoint)
+        logging.info(
+            "Schedule: temperature anneal over {} epochs (train target {}); attack ramp identity<={} end={}".format(
+                getattr(hidden_config, "schedule_total_epochs", "?"),
+                train_options.number_of_epochs,
+                getattr(hidden_config, "attack_schedule_identity_epochs", 20),
+                getattr(hidden_config, "attack_schedule_end_epoch", 80),
+            )
+        )
 
     logging.info("Branch: hidden_moe_unfrozen (warm-start checkpoint, backbone trainable by default).")
     if getattr(hidden_config, "apply_training_noise", False):

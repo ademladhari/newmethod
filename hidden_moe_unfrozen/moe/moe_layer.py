@@ -75,13 +75,30 @@ class MoELayer(nn.Module):
         pooled = self.pool(shared_features).flatten(start_dim=1)
         topk_indices, topk_weights, full_probs, router_logits = self.router(pooled)
 
-        expert_outputs = []
-        for expert in self.experts:
-            expert_outputs.append(expert(shared_features))
+        if not self.training and self.top_k == 1:
+            # True sparse dispatch at inference: only the selected expert runs per image.
+            # Numerically identical to the dense path for the chosen expert's output;
+            # the other (N-1) experts never execute, giving ~1/N the expert compute.
+            expert_idx = topk_indices[:, 0]  # [B]
+            message_length = self.experts[0].linear.out_features
+            combined = torch.zeros(
+                x.shape[0], message_length, device=x.device, dtype=shared_features.dtype
+            )
+            for i, expert in enumerate(self.experts):
+                mask = expert_idx == i
+                if mask.any():
+                    combined[mask] = expert(shared_features[mask])
+            combined = combined * topk_weights[:, 0].to(combined.dtype).unsqueeze(-1)
+        else:
+            # Dense evaluation: all experts run (used during training so all experts
+            # receive gradients, and as fallback for top_k > 1 at inference).
+            expert_outputs = []
+            for expert in self.experts:
+                expert_outputs.append(expert(shared_features))
+            stacked_outputs = torch.stack(expert_outputs, dim=1)
+            gather_index = topk_indices.unsqueeze(-1).expand(-1, -1, stacked_outputs.shape[-1])
+            selected_outputs = torch.gather(stacked_outputs, dim=1, index=gather_index)
+            combined = torch.sum(selected_outputs * topk_weights.to(selected_outputs.dtype).unsqueeze(-1), dim=1)
 
-        stacked_outputs = torch.stack(expert_outputs, dim=1)
-        gather_index = topk_indices.unsqueeze(-1).expand(-1, -1, stacked_outputs.shape[-1])
-        selected_outputs = torch.gather(stacked_outputs, dim=1, index=gather_index)
-        combined = torch.sum(selected_outputs * topk_weights.to(selected_outputs.dtype).unsqueeze(-1), dim=1)
         return combined, full_probs, topk_indices, router_logits
 

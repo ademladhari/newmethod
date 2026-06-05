@@ -87,6 +87,13 @@ class MoENoiseLayer(nn.Module):
         self.attack_weights = np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float64)
         self._selected_expert_idx = 0
         self._locked_expert_idx = None
+        self._identity_epochs = 20
+        self._schedule_end_epoch = 80
+
+    def set_schedule_bounds(self, identity_epochs: int = 20, end_epoch: int = 80):
+        """Attack curriculum bounds (fixed at run creation; absolute epoch numbers)."""
+        self._identity_epochs = int(identity_epochs)
+        self._schedule_end_epoch = int(end_epoch)
 
     def set_attack_weights(self, attack_weights):
         if len(attack_weights) != len(self.experts):
@@ -97,12 +104,15 @@ class MoENoiseLayer(nn.Module):
         self.attack_weights = weights / np.sum(weights)
 
     def set_training_schedule(self, epoch: int):
-        if epoch <= 20:
+        identity_epochs = getattr(self, "_identity_epochs", 20)
+        end_epoch = max(getattr(self, "_schedule_end_epoch", 80), identity_epochs + 1)
+        if epoch <= identity_epochs:
             self.set_attack_weights([1.0, 0.0, 0.0, 0.0, 0.0, 0.0])
             return
 
-        if epoch <= 80:
-            progress = float(epoch - 20) / 60.0
+        if epoch <= end_epoch:
+            ramp = max(1.0, float(end_epoch - identity_epochs))
+            progress = float(epoch - identity_epochs) / ramp
             non_identity = max(0.0, min(1.0, progress))
             each = non_identity / 5.0
             self.set_attack_weights([1.0 - non_identity, each, each, each, each, each])

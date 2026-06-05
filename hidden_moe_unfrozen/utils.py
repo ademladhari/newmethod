@@ -19,7 +19,8 @@ class FlatImageFolder(Dataset):
     @staticmethod
     def _collect_image_paths(root):
         paths = []
-        for dirpath, _, filenames in os.walk(root):
+        # followlinks=True: Kaggle/COCO layouts often use symlinks (train2017 + unlabeled2017).
+        for dirpath, _, filenames in os.walk(root, followlinks=True):
             for name in filenames:
                 if os.path.splitext(name)[1].lower() in _IMAGE_EXTENSIONS:
                     paths.append(os.path.join(dirpath, name))

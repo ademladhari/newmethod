@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Embed + decode watermarks on N images: HiDDeN epoch-177 vs MoE unfrozen (best run).
 
@@ -84,7 +84,7 @@ def load_moe_model(moe_run: Path, checkpoint_path: Path, device: torch.device):
     _, hidden_config, _ = moe_utils.load_options(str(options_file))
     checkpoint = torch.load(checkpoint_path, map_location=device)
     model = HiddenMoE(hidden_config, device, tb_logger=None)
-    model.load_from_checkpoint(checkpoint)
+    model.load_from_checkpoint(checkpoint, load_optimizers=False)
     model.set_epoch(checkpoint.get("epoch", 20))
     model.encoder_decoder.eval()
     model.discriminator.eval()
@@ -230,6 +230,8 @@ def main():
     parser.add_argument("--moe-checkpoint", type=Path, default=DEFAULT_MOE_CKPT)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--no-save-images", action="store_true",
+                        help="Skip per-image PNGs; only summary.csv is written.")
     args = parser.parse_args()
 
     val_dir = args.data_dir / args.val_folder
@@ -238,8 +240,10 @@ def main():
 
     device = torch.device(args.device)
     out_dir = args.output_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
     img_dir = out_dir / "images"
-    img_dir.mkdir(parents=True, exist_ok=True)
+    if not args.no_save_images:
+        img_dir.mkdir(parents=True, exist_ok=True)
 
     print("Device:", device)
     print("Display max side:", args.max_side, "| tiled:", not args.center_crop_only)
@@ -326,35 +330,37 @@ def main():
             f"PSNR HiDDeN={psnr_h:.2f} MoE={psnr_m:.2f}"
         )
 
-        stem = f"{idx:02d}_{path.stem}"
-        cover_pil.save(img_dir / f"{stem}_cover.png")
-        hidden_pil.save(img_dir / f"{stem}_hidden_wm.png")
-        moe_pil.save(img_dir / f"{stem}_moe_wm.png")
-        # Center 128×128 upscaled — shows true model quality without tile seams
-        cover_center = transforms.CenterCrop((patch_h, patch_w))(display)
-        hidden_center = Image.fromarray(encoded_tensor_to_uint8(enc_h_center))
-        moe_center = Image.fromarray(encoded_tensor_to_uint8(enc_m_center))
-        scale = max(1, args.max_side // max(patch_h, patch_w))
-        upscale_pil(cover_center, scale).save(img_dir / f"{stem}_cover_center{scale}x.png")
-        upscale_pil(hidden_center, scale).save(img_dir / f"{stem}_hidden_wm_center{scale}x.png")
-        upscale_pil(moe_center, scale).save(img_dir / f"{stem}_moe_wm_center{scale}x.png")
+        if not args.no_save_images:
+            stem = f"{idx:02d}_{path.stem}"
+            cover_pil.save(img_dir / f"{stem}_cover.png")
+            hidden_pil.save(img_dir / f"{stem}_hidden_wm.png")
+            moe_pil.save(img_dir / f"{stem}_moe_wm.png")
+            # Center 128×128 upscaled — shows true model quality without tile seams
+            cover_center = transforms.CenterCrop((patch_h, patch_w))(display)
+            hidden_center = Image.fromarray(encoded_tensor_to_uint8(enc_h_center))
+            moe_center = Image.fromarray(encoded_tensor_to_uint8(enc_m_center))
+            scale = max(1, args.max_side // max(patch_h, patch_w))
+            upscale_pil(cover_center, scale).save(img_dir / f"{stem}_cover_center{scale}x.png")
+            upscale_pil(hidden_center, scale).save(img_dir / f"{stem}_hidden_wm_center{scale}x.png")
+            upscale_pil(moe_center, scale).save(img_dir / f"{stem}_moe_wm_center{scale}x.png")
 
-        trip = torch.stack(
-            [
-                pil_to_grid_tensor(cover_pil),
-                pil_to_grid_tensor(hidden_pil),
-                pil_to_grid_tensor(moe_pil),
-            ]
-        )
-        vutils.save_image(trip, img_dir / f"{stem}_triptych.png", nrow=3)
-        grid_rows.append(trip)
+            trip = torch.stack(
+                [
+                    pil_to_grid_tensor(cover_pil),
+                    pil_to_grid_tensor(hidden_pil),
+                    pil_to_grid_tensor(moe_pil),
+                ]
+            )
+            vutils.save_image(trip, img_dir / f"{stem}_triptych.png", nrow=3)
+            grid_rows.append(trip)
 
     with (out_dir / "summary.csv").open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         writer.writeheader()
         writer.writerows(rows)
 
-    vutils.save_image(torch.cat(grid_rows, dim=0), out_dir / "comparison_grid.png", nrow=3)
+    if not args.no_save_images and grid_rows:
+        vutils.save_image(torch.cat(grid_rows, dim=0), out_dir / "comparison_grid.png", nrow=3)
 
     def _summarize_ber(name: str, key: str) -> None:
         bers = [r[key] for r in rows]
@@ -366,8 +372,12 @@ def main():
 
     _summarize_ber("HiDDeN", "hidden_ber_validate")
     _summarize_ber("MoE", "moe_ber_validate")
-    print(f"\nSaved full-size images under {img_dir}")
-    print("For visuals without tile seams, open *_hidden_wm_center8x.png (not *_hidden_wm.png).")
+    print(f"\nSaved summary to {out_dir / 'summary.csv'}")
+    if args.no_save_images:
+        print("(Per-image PNGs skipped: --no-save-images)")
+    else:
+        print(f"Saved per-image PNGs under {img_dir}")
+        print("For visuals without tile seams, open *_hidden_wm_center8x.png (not *_hidden_wm.png).")
 
 
 if __name__ == "__main__":

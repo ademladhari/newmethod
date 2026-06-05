@@ -42,6 +42,9 @@ class HiDDenMoEConfiguration(HiDDenConfiguration):
         freeze_hidden_backbone: bool = False,
         freeze_discriminator: bool = False,
         apply_training_noise: bool = False,
+        schedule_total_epochs: int | None = None,
+        attack_schedule_identity_epochs: int = 20,
+        attack_schedule_end_epoch: int = 80,
     ):
         super(HiDDenMoEConfiguration, self).__init__(
             H=H,
@@ -82,4 +85,8 @@ class HiDDenMoEConfiguration(HiDDenConfiguration):
         self.freeze_hidden_backbone = freeze_hidden_backbone
         self.freeze_discriminator = freeze_discriminator
         self.apply_training_noise = apply_training_noise
+        # Fixed at `new` — used for router temperature (and attack ramp end); not extended on `continue`.
+        self.schedule_total_epochs = schedule_total_epochs
+        self.attack_schedule_identity_epochs = attack_schedule_identity_epochs
+        self.attack_schedule_end_epoch = attack_schedule_end_epoch
 

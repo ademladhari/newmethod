@@ -69,11 +69,16 @@ Runs are written under `./runs/` inside this folder (separate from `hidden_froze
 
 ## Continue a run
 
+`schedule_total_epochs` is fixed when you run `new` and drives router temperature (and attack ramp end).  
+On `continue`, only `number_of_epochs` may increase — temperature does **not** jump back to a softer router.
+
+Use a run folder whose **latest checkpoint** is the epoch you want to resume from (delete later checkpoints if re-running a continue).
+
 ```python
 import glob
 %cd /kaggle/working/newmethod/hidden_moe_unfrozen
 RUN = sorted(glob.glob("runs/moe_unfrozen_sym_t14_v1*"))[-1]
-!python -u train_moe.py continue --folder "{RUN}" --data-dir /kaggle/working/coco100k --epochs 20 --num-workers 6 --pin-memory --prefetch-factor 3 --save-every 5 --print-each 100
+!python -u train_moe.py continue --folder "{RUN}" --data-dir /kaggle/working/coco100k --epochs 60 --num-workers 6 --pin-memory --prefetch-factor 3 --save-every 5 --print-each 100
 ```
 
 ## What warm-start loads
