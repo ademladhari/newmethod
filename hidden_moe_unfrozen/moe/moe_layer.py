@@ -58,6 +58,12 @@ class MoELayer(nn.Module):
             ]
         )
         self._apply_distinct_expert_init(expert_init_offset_scale)
+        # Inference-only diagnostic: blend all experts by router softmax (see set_eval_soft_router).
+        self.eval_soft_router = False
+
+    def set_eval_soft_router(self, enabled: bool):
+        """When True at eval with top_k=1, use full softmax over all experts instead of hard top-1."""
+        self.eval_soft_router = bool(enabled)
 
     def _apply_distinct_expert_init(self, offset_scale: float):
         if offset_scale <= 0:
@@ -75,10 +81,11 @@ class MoELayer(nn.Module):
         pooled = self.pool(shared_features).flatten(start_dim=1)
         topk_indices, topk_weights, full_probs, router_logits = self.router(pooled)
 
-        if not self.training and self.top_k == 1:
+        expert_outputs = [expert(shared_features) for expert in self.experts]
+        stacked_outputs = torch.stack(expert_outputs, dim=1)
+
+        if not self.training and self.top_k == 1 and not self.eval_soft_router:
             # True sparse dispatch at inference: only the selected expert runs per image.
-            # Numerically identical to the dense path for the chosen expert's output;
-            # the other (N-1) experts never execute, giving ~1/N the expert compute.
             expert_idx = topk_indices[:, 0]  # [B]
             message_length = self.experts[0].linear.out_features
             combined = torch.zeros(
@@ -87,15 +94,14 @@ class MoELayer(nn.Module):
             for i, expert in enumerate(self.experts):
                 mask = expert_idx == i
                 if mask.any():
-                    combined[mask] = expert(shared_features[mask])
+                    combined[mask] = expert_outputs[i][mask]
             combined = combined * topk_weights[:, 0].to(combined.dtype).unsqueeze(-1)
+        elif not self.training and self.top_k == 1 and self.eval_soft_router:
+            # Diagnostic: weighted sum over all experts (full router softmax, no hard pick).
+            weights = full_probs.unsqueeze(-1).to(stacked_outputs.dtype)
+            combined = torch.sum(stacked_outputs * weights, dim=1)
         else:
-            # Dense evaluation: all experts run (used during training so all experts
-            # receive gradients, and as fallback for top_k > 1 at inference).
-            expert_outputs = []
-            for expert in self.experts:
-                expert_outputs.append(expert(shared_features))
-            stacked_outputs = torch.stack(expert_outputs, dim=1)
+            # Training or top_k > 1: top-k weighted blend (all experts run in training).
             gather_index = topk_indices.unsqueeze(-1).expand(-1, -1, stacked_outputs.shape[-1])
             selected_outputs = torch.gather(stacked_outputs, dim=1, index=gather_index)
             combined = torch.sum(selected_outputs * topk_weights.to(selected_outputs.dtype).unsqueeze(-1), dim=1)

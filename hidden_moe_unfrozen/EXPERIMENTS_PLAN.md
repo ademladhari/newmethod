@@ -117,7 +117,7 @@ python -u train_moe.py new \
   --num-workers 4 \
   --pin-memory \
   --prefetch-factor 3 \
-  --save-every 5 \
+  --save-every 1 \
   --print-each 100
 ```
 

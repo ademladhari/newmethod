@@ -53,7 +53,7 @@ Runs are written under `./runs/` inside this folder (separate from `hidden_froze
   --num-workers 6 \
   --pin-memory \
   --prefetch-factor 3 \
-  --save-every 5 \
+  --save-every 1 \
   --print-each 100
 ```
 
@@ -78,7 +78,7 @@ Use a run folder whose **latest checkpoint** is the epoch you want to resume fro
 import glob
 %cd /kaggle/working/newmethod/hidden_moe_unfrozen
 RUN = sorted(glob.glob("runs/moe_unfrozen_sym_t14_v1*"))[-1]
-!python -u train_moe.py continue --folder "{RUN}" --data-dir /kaggle/working/coco100k --epochs 60 --num-workers 6 --pin-memory --prefetch-factor 3 --save-every 5 --print-each 100
+!python -u train_moe.py continue --folder "{RUN}" --data-dir /kaggle/working/coco100k --epochs 60 --num-workers 6 --pin-memory --prefetch-factor 3 --save-every 1 --print-each 100
 ```
 
 ## What warm-start loads

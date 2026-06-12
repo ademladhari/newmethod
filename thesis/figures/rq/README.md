@@ -13,7 +13,7 @@ py -3 scripts/plot_thesis_rq_figures.py
 | `RQ3_ablation_conditions` | RQ3 | §4.4 backbone / top-k / experts |
 | `RQ3_routing_symmetry` | RQ3 | §4.4 train/val symmetry |
 | `RQ4_inference_cost` | RQ4 | §4.6 inference schematic |
-| `RQ5_collapse_vs_ber` | RQ5 | §4.5 correlation (r=+0.63, p=0.0030, n=20) |
+| `RQ5_collapse_vs_ber` | RQ5 | §4.5 correlation (r=+0.62, p=0.0036, n=20) |
 | `RQ5_failure_mode_signatures` | RQ5 | §4.5 three failure modes |
 | `RQ5_training_dynamics` | RQ5 | §4.5 R0 vs collapsed trajectories |
 

@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Embed + decode watermarks on N images: HiDDeN epoch-177 vs MoE unfrozen (best run).
 
@@ -78,7 +78,13 @@ def load_hidden_baseline(checkpoint_path: Path, options_path: Path, device: torc
     return model, hidden_config, hidden_utils
 
 
-def load_moe_model(moe_run: Path, checkpoint_path: Path, device: torch.device):
+def load_moe_model(
+    moe_run: Path,
+    checkpoint_path: Path,
+    device: torch.device,
+    *,
+    soft_router: bool = False,
+):
     moe_utils, _Hidden, HiddenMoE, Noiser = _import_moe_utils()
     options_file = moe_run / "options-and-config.pickle"
     _, hidden_config, _ = moe_utils.load_options(str(options_file))
@@ -86,6 +92,7 @@ def load_moe_model(moe_run: Path, checkpoint_path: Path, device: torch.device):
     model = HiddenMoE(hidden_config, device, tb_logger=None)
     model.load_from_checkpoint(checkpoint, load_optimizers=False)
     model.set_epoch(checkpoint.get("epoch", 20))
+    model.set_eval_soft_router(soft_router)
     model.encoder_decoder.eval()
     model.discriminator.eval()
     return model, hidden_config

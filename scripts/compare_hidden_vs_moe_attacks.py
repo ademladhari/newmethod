@@ -126,10 +126,14 @@ def evaluate_attack(
     hidden_bers: list[float] = []
     moe_bers: list[float] = []
     batches = 0
+    loader_iter = iter(loader)
 
-    for images, _ in loader:
-        if max_batches is not None and batches >= max_batches:
-            break
+    while max_batches is None or batches < max_batches:
+        try:
+            images, _ = next(loader_iter)
+        except StopIteration:
+            loader_iter = iter(loader)
+            images, _ = next(loader_iter)
         batches += 1
         images = images.to(device)
         message = torch.tensor(
@@ -207,7 +211,13 @@ def main():
     parser.add_argument("--data-dir", type=Path, default=ROOT / "data" / "coco100k")
     parser.add_argument("--val-folder", type=str, default="val")
     parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--max-batches", type=int, default=50, help="Val batches per attack (50×16=800 images).")
+    parser.add_argument("--max-batches", type=int, default=None, help="Val batches per attack (cycles val if needed).")
+    parser.add_argument(
+        "--max-images",
+        type=int,
+        default=1000,
+        help="Images per attack; val folder is cycled if smaller than this (default: 1000).",
+    )
     parser.add_argument(
         "--attacks",
         type=str,
@@ -219,6 +229,11 @@ def main():
     parser.add_argument("--hidden-options", type=Path, default=None)
     parser.add_argument("--moe-run-folder", type=Path, default=DEFAULT_MOE_RUN)
     parser.add_argument("--moe-checkpoint", type=Path, default=DEFAULT_MOE_CKPT)
+    parser.add_argument(
+        "--moe-soft-router",
+        action="store_true",
+        help="Blend all experts by router softmax at decode (default: hard top-1). Omit flag to restore normal eval.",
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--hidden-only", action="store_true", help="Skip MoE (baseline only).")
     parser.add_argument(
@@ -256,7 +271,13 @@ def main():
     moe_model = None
     if not args.hidden_only:
         print("MoE checkpoint:", args.moe_checkpoint)
-        moe_model, _ = cmp.load_moe_model(args.moe_run_folder, args.moe_checkpoint, device)
+        print("MoE routing at eval:", "soft (all experts)" if args.moe_soft_router else "hard top-1")
+        moe_model, _ = cmp.load_moe_model(
+            args.moe_run_folder,
+            args.moe_checkpoint,
+            device,
+            soft_router=args.moe_soft_router,
+        )
 
     val_dir = args.data_dir / args.val_folder
     if not val_dir.is_dir():
@@ -267,7 +288,14 @@ def main():
     )
     attacks = parse_attacks(args.attacks, device)
 
-    print(f"\nVal: {val_dir} | batch_size={args.batch_size} | max_batches={args.max_batches}")
+    max_batches = args.max_batches
+    if max_batches is None:
+        max_batches = (args.max_images + args.batch_size - 1) // args.batch_size
+
+    print(
+        f"\nVal: {val_dir} | batch_size={args.batch_size} | "
+        f"max_images={args.max_images} | max_batches={max_batches}"
+    )
     print("Attacks:", ", ".join(attacks.keys()))
     print("\nBER = fraction of wrong bits (lower is better). BitAcc = 1 - BER.\n")
 
@@ -283,7 +311,7 @@ def main():
             hidden_cfg.message_length,
             device,
             args.hidden_only,
-            args.max_batches,
+            max_batches,
         )
         rows.append(row)
 

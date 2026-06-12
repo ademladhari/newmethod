@@ -71,51 +71,38 @@ def r0_ep20() -> dict:
 # RQ1 — Clean watermark quality
 # ---------------------------------------------------------------------------
 def fig_rq1_clean_quality():
+    """MoE routing diagnostics only (clean BER is in Figure 5.1 table)."""
     r0 = r0_ep20()
-    # HiDDeN-177: thesis-aligned clean val on same metric (from attack identity ≈ val)
-    atk = pd.read_csv(ATTACK_MAIN)
-    hid_identity = float(atk.loc[atk["attack"] == "identity", "hidden_ber"].iloc[0]) * 100
-    moe_identity = float(atk.loc[atk["attack"] == "identity", "moe_ber"].iloc[0]) * 100
 
-    fig, axes = plt.subplots(1, 2, figsize=(8.5, 3.8))
+    fig, ax = plt.subplots(figsize=(5.2, 3.6))
 
-    # Panel A: validation BER
-    labels = ["HiDDeN-177\n(baseline)", "MoE R0\n(unfrozen, 4e, k=1)"]
-    vals = [0.33, r0["ber_pct"]]  # 0.33% = reported HiDDeN clean val; R0 from logs
-    bars = axes[0].bar([0, 1], vals, width=0.5, color=["0.85", "white"], edgecolor="black", linewidth=1.2)
-    bars[1].set_hatch("///")
-    axes[0].set_ylabel("Clean validation BER (%)")
-    axes[0].set_xticks([0, 1])
-    axes[0].set_xticklabels(labels, fontsize=9)
-    axes[0].set_ylim(0, max(vals) * 1.35)
-    axes[0].set_title("(a) Clean-channel BER @ epoch 20", fontweight="bold")
-    for b, v in zip(bars, vals):
-        axes[0].text(b.get_x() + b.get_width() / 2, v + 0.02, f"{v:.2f}%", ha="center", fontsize=9)
-    axes[0].text(0.5, 0.95, f"Δ = {abs(vals[1] - vals[0]):.2f} pp (not meaningful)", transform=axes[0].transAxes,
-                 ha="center", va="top", fontsize=8, style="italic")
-    axes[0].grid(True, axis="y", linestyle=":", alpha=0.6)
-
-    # Panel B: routing health at same checkpoint
-    metrics = ["effective_experts", "expert_max_use", "train_val_load_l1"]
     labels_m = ["Effective\nexperts", "max_use", "load_l1"]
     r0_vals = [r0["eff_exp"], r0["max_use"], r0["load_l1"]]
     x = np.arange(3)
-    bars = axes[1].bar(x, r0_vals, color="white", edgecolor="black", linewidth=1.2, hatch="///")
-    axes[1].axhline(1.0, color="0.5", linestyle=":", linewidth=1, label="uniform max_use (4e)")
-    axes[1].axhline(0.20, color="0.35", linestyle="--", linewidth=1, label="healthy load_l1 (<0.20)")
-    axes[1].set_xticks(x)
-    axes[1].set_xticklabels(labels_m, fontsize=9)
-    axes[1].set_title("(b) MoE routing stability @ epoch 20", fontweight="bold")
-    axes[1].legend(fontsize=7, loc="upper right", frameon=True, edgecolor="black")
+    bars = ax.bar(x, r0_vals, color="#e8f4ec", edgecolor="black", linewidth=1.2)
+    ax.axhline(1.0, color="0.5", linestyle=":", linewidth=1, label="uniform max_use (4e)")
+    ax.axhline(0.25, color="0.45", linestyle="-.", linewidth=1, label="ideal max_use (4e, $k{=}1$)")
+    ax.axhline(0.20, color="0.35", linestyle="--", linewidth=1, label="healthy load_l1 ($<0.20$)")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels_m, fontsize=9)
+    ax.set_ylabel("Routing metric value")
+    ax.set_title("MoE R0 routing stability at epoch 20", fontweight="bold")
+    ax.legend(fontsize=7, loc="upper right", frameon=True, edgecolor="black")
     for b, v in zip(bars, r0_vals):
-        axes[1].text(b.get_x() + b.get_width() / 2, v + 0.02, f"{v:.3f}", ha="center", fontsize=8)
-    axes[1].grid(True, axis="y", linestyle=":", alpha=0.6)
-
-    fig.suptitle("RQ1: MoE matches HiDDeN clean fidelity with stable 4-expert routing", fontweight="bold", y=1.02)
-    fig.text(0.5, -0.02, f"Identity attack check: HiDDeN {hid_identity:.2f}% vs MoE {moe_identity:.2f}% BER (same eval pipeline)",
-             ha="center", fontsize=8, style="italic")
+        ax.text(b.get_x() + b.get_width() / 2, v + 0.04, f"{v:.3f}", ha="center", fontsize=9)
+    ax.set_ylim(0, max(1.05, max(r0_vals) * 1.15))
+    ax.grid(True, axis="y", linestyle=":", alpha=0.6)
     fig.tight_layout()
     save(fig, "RQ1_clean_quality")
+
+    # copy to new_figures for thesis path consistency
+    new_dir = ROOT / "thesis" / "figures" / "new_figures"
+    new_dir.mkdir(parents=True, exist_ok=True)
+    for ext in ("png", "pdf"):
+        src = OUT / f"RQ1_clean_quality.{ext}"
+        if src.exists():
+            import shutil
+            shutil.copy(src, new_dir / f"RQ1_routing_stability.{ext}")
 
 
 # ---------------------------------------------------------------------------
@@ -163,9 +150,10 @@ def fig_rq2_attacks():
         axes[1].text(d + (0.8 if d >= 0 else -0.8), i, f"{d:+.1f}", va="center",
                      ha="left" if d >= 0 else "right", fontsize=8)
 
+    weakness = "JPEG" if n_loss == 1 else f"{n_loss} attacks"
     fig.suptitle(
-        f"RQ2: MoE improves robustness on {n_win}/8 attacks; JPEG and resize are weaknesses",
-        fontweight="bold", y=1.02,
+        f"RQ2: MoE wins on {n_win}/8 attacks; {weakness} is the main weakness",
+        fontweight="bold", y=1.06,
     )
     fig.text(0.5, -0.04,
              f"Wins (Δ>0.5 pp): {n_win} · Losses: {n_loss} · Near tie: {n_tie} · Source: attack_summary_main_ep20.csv",

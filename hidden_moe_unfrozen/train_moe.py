@@ -521,6 +521,11 @@ def main():
     pin_memory = getattr(args, "pin_memory", False)
     prefetch_factor = getattr(args, "prefetch_factor", 3)
     save_every = max(1, args.save_every)
+    if save_every > 1:
+        logging.warning(
+            "save_every=%d — checkpoints are NOT saved every epoch. Use --save-every 1 for replication.",
+            save_every,
+        )
     use_multi_gpu = not args.no_multi_gpu
     checkpoint = None
     loaded_checkpoint_file_name = None

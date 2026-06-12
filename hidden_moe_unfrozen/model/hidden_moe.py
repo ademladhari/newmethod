@@ -282,6 +282,10 @@ class HiddenMoE:
         ) * progress
         encoder_decoder.decoder.moe_layer.router.set_temperature(current_temperature)
 
+    def set_eval_soft_router(self, enabled: bool):
+        """Toggle softmax blend over all experts at inference (default: hard top-1)."""
+        self._encoder_decoder_module().decoder.moe_layer.set_eval_soft_router(enabled)
+
     def _calc_balance_loss(self, router_probs: torch.Tensor, topk_indices: torch.Tensor):
         num_experts = router_probs.shape[1]
         importance = torch.mean(router_probs, dim=0)
